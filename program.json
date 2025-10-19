@@ -1,0 +1,231 @@
+{
+  "program_name": "Langrenn staking med løpsfokus",
+  "duration_weeks": 12,
+  "weekly_structure": {
+    "monday": {
+      "workout_type": "rest",
+      "optional": true
+    },
+    "tuesday": {
+      "workout_type": "vo2max_intervals_and_strength",
+      "parts": [
+        {
+          "part": 1,
+          "type": "vo2max_intervals",
+          "modality": "treadmill_running",
+          "duration_min": 60,
+          "structure": {
+            "warmup_duration_min": 15,
+            "warmup_intensity_zone": 2,
+            "main_set_variants": [
+              {
+                "variant": "A",
+                "intervals": 4,
+                "work_duration_min": 6,
+                "rest_duration_min": 3
+              },
+              {
+                "variant": "B",
+                "intervals": 5,
+                "work_duration_min": 5,
+                "rest_duration_min": 2.5
+              },
+              {
+                "variant": "C",
+                "intervals": 6,
+                "work_duration_min": 4,
+                "rest_duration_min": 2
+              },
+              {
+                "variant": "D",
+                "intervals": 4,
+                "work_duration_min": 8,
+                "rest_duration_min": 4
+              }
+            ],
+            "work_intensity_zones": [4, 5],
+            "work_intensity_typical": "90-95",
+            "rest_intensity_zones": [1, 2],
+            "cooldown_duration_min": 10,
+            "cooldown_intensity_zones": [1, 2]
+          }
+        },
+        {
+          "part": 2,
+          "type": "strength_heavy",
+          "duration_min": 45,
+          "exercises": [
+            {"name": "Pullups", "sets": 4, "reps": "6-8"},
+            {"name": "Dips/Bench_press", "sets": 4, "reps": "6-8"},
+            {"name": "Shoulder_press", "sets": 3, "reps": "8"},
+            {"name": "Weighted_plank", "sets": 3, "duration_sec": "45-60"},
+            {"name": "Pallof_press", "sets": 3, "reps": "10 each side"}
+          ],
+          "rest_between_sets_min": 2.5
+        }
+      ]
+    },
+    "wednesday": {
+      "workout_type": "easy_endurance",
+      "duration_min": 55,
+      "intensity_zones": [1, 2],
+      "modality": "flexible"
+    },
+    "thursday": {
+      "workout_type": "vo2max_intervals_and_strength",
+      "parts": [
+        {
+          "part": 1,
+          "type": "vo2max_intervals",
+          "modality": "treadmill_running",
+          "duration_min": 60,
+          "structure": {
+            "warmup_duration_min": 15,
+            "warmup_intensity_zone": 2,
+            "main_set_variants": [
+              {
+                "variant": "A",
+                "intervals": 4,
+                "work_duration_min": 6,
+                "rest_duration_min": 3
+              },
+              {
+                "variant": "B",
+                "intervals": 5,
+                "work_duration_min": 5,
+                "rest_duration_min": 2.5
+              },
+              {
+                "variant": "C",
+                "intervals": 6,
+                "work_duration_min": 4,
+                "rest_duration_min": 2
+              },
+              {
+                "variant": "D",
+                "intervals": 4,
+                "work_duration_min": 8,
+                "rest_duration_min": 4
+              }
+            ],
+            "work_intensity_zones": [4, 5],
+            "work_intensity_typical": "90-95",
+            "rest_intensity_zones": [1, 2],
+            "cooldown_duration_min": 10,
+            "cooldown_intensity_zones": [1, 2]
+          },
+          "note": "Use different variant than Tuesday"
+        },
+        {
+          "part": 2,
+          "type": "strength_endurance",
+          "duration_min": 40,
+          "exercises": [
+            {"name": "Poling_with_bands", "sets": 3, "reps": "20-30"},
+            {"name": "Rows_high_reps", "sets": 3, "reps": "15-20"},
+            {"name": "Triceps_extensions", "sets": 3, "reps": "15"},
+            {"name": "Mountain_climbers", "sets": 3, "duration_sec": "60"},
+            {"name": "Side_plank", "sets": 3, "duration_sec": "60 each side"},
+            {"name": "Box_jumps", "sets": 3, "reps": "8", "optional": true}
+          ],
+          "rest_between_sets_min": 1.25
+        }
+      ]
+    },
+    "friday": {
+      "workout_type": "rest",
+      "optional": true
+    },
+    "saturday": {
+      "workout_type": "threshold_intervals",
+      "duration_min": 65,
+      "modality": "flexible",
+      "structure": {
+        "warmup_duration_min": 15,
+        "warmup_intensity_zone": 2,
+        "main_set_variants": [
+          {
+            "variant": "A",
+            "intervals": 3,
+            "work_duration_min": 8,
+            "rest_duration_min": 3
+          },
+          {
+            "variant": "B",
+            "intervals": 4,
+            "work_duration_min": 8,
+            "rest_duration_min": 3
+          }
+        ],
+        "work_intensity_zones": [3, 4],
+        "work_intensity_typical": "85-90",
+        "rest_intensity_zones": [1, 2],
+        "cooldown_duration_min": 10,
+        "cooldown_intensity_zones": [1, 2]
+      }
+    },
+    "sunday": {
+      "workout_type": "long_run",
+      "duration_min": 85,
+      "intensity_zones": [1, 2],
+      "modality": "flexible"
+    }
+  },
+  "periodization": {
+    "phase_1": {
+      "weeks": "1-4",
+      "name": "Base_building",
+      "vo2max_variants": ["A", "B"],
+      "threshold_intervals": 3,
+      "long_run_duration_min": 75
+    },
+    "phase_2": {
+      "weeks": "5-8",
+      "name": "Intensity_increase",
+      "vo2max_variants": ["B", "C"],
+      "threshold_intervals": 4,
+      "long_run_duration_min": 85
+    },
+    "phase_3": {
+      "weeks": "9-12",
+      "name": "Ski_season_prep",
+      "vo2max_variants": ["all"],
+      "threshold_intervals": 4,
+      "long_run_duration_min": 90,
+      "note": "transition_to_skiing_when_snow_arrives"
+    },
+    "recovery_weeks": [3, 7, 11]
+  },
+  "heart_rate_zones": {
+    "zone_1": {
+      "name": "Very_easy",
+      "percent_min": 60,
+      "percent_max": 72,
+      "description": "Recovery_intensity"
+    },
+    "zone_2": {
+      "name": "Easy",
+      "percent_min": 72,
+      "percent_max": 82,
+      "description": "Base_training_can_speak_in_sentences"
+    },
+    "zone_3": {
+      "name": "Moderate",
+      "percent_min": 82,
+      "percent_max": 87,
+      "description": "Tempo_can_speak_short_sentences"
+    },
+    "zone_4": {
+      "name": "Threshold",
+      "percent_min": 87,
+      "percent_max": 92,
+      "description": "Controlled_hard_few_words"
+    },
+    "zone_5": {
+      "name": "VO2max",
+      "percent_min": 92,
+      "percent_max": 100,
+      "description": "Maximum_intensity_cannot_speak"
+    }
+  }
+}
