@@ -49,13 +49,6 @@ class IntervalStructure(BaseModel):
     cooldown_intensity_zones: List[int]
 
 
-class StrengthWorkout(BaseModel):
-    """Strength training workout."""
-    duration_min: int
-    exercises: List[Exercise]
-    rest_between_sets_min: float
-
-
 class WorkoutPart(BaseModel):
     """Part of a multi-part workout."""
     part: int
@@ -116,22 +109,3 @@ class Program(BaseModel):
     weekly_structure: WeeklyStructure
     periodization: Periodization
     heart_rate_zones: HeartRateZones
-
-
-class GarminWorkoutStep(BaseModel):
-    """Single step in a Garmin workout."""
-    type: Literal["warmup", "cooldown", "interval", "rest", "repeat"]
-    duration_type: Optional[str] = None
-    duration_value: Optional[float] = None
-    target_type: Optional[str] = None
-    target_value_low: Optional[int] = None
-    target_value_high: Optional[int] = None
-    repeat_count: Optional[int] = None
-    steps: Optional[List['GarminWorkoutStep']] = None
-
-
-class GarminWorkout(BaseModel):
-    """Garmin Connect workout format."""
-    workout_name: str
-    sport_type: Literal["running", "other"]
-    steps: List[GarminWorkoutStep]
