@@ -53,11 +53,12 @@ class GarminClient:
             print(f"[ERROR] Connection test failed: {e}")
             return False
 
-    def list_workouts(self, limit: int = 10) -> List[Dict]:
+    def list_workouts(self, limit: int = 100, silent: bool = False) -> List[Dict]:
         """List existing workouts on Garmin Connect.
 
         Args:
-            limit: Maximum number of workouts to retrieve
+            limit: Maximum number of workouts to retrieve (default: 100)
+            silent: If True, don't print the list (default: False)
 
         Returns:
             List of workout dictionaries
@@ -67,15 +68,36 @@ class GarminClient:
                 return []
 
         try:
-            workouts = self.client.get_workouts(limit)
-            print(f"\nFound {len(workouts)} workouts:")
-            for i, workout in enumerate(workouts, 1):
-                name = workout.get('workoutName', 'Unnamed')
-                sport = workout.get('sportType', {}).get('sportTypeKey', 'unknown')
-                print(f"  {i}. {name} ({sport})")
+            # Use direct API endpoint (garminconnect library's get_workouts() is broken)
+            url = f"{self.client.garmin_workouts}/workouts"
+            response = self.client.garth.get("connectapi", url, api=True)
+            workouts = response.json()
+
+            # Handle response format
+            if isinstance(workouts, dict) and 'workouts' in workouts:
+                workouts = workouts['workouts']
+            elif not isinstance(workouts, list):
+                workouts = []
+
+            # Apply limit
+            workouts = workouts[:limit]
+
+            if not silent:
+                print(f"\nFound {len(workouts)} workout template(s):")
+
+                if workouts:
+                    for i, workout in enumerate(workouts, 1):
+                        name = workout.get('workoutName', 'Unnamed')
+                        sport = workout.get('sportType', {}).get('sportTypeKey', 'unknown')
+                        workout_id = workout.get('workoutId', 'N/A')
+                        print(f"  {i}. {name} ({sport}) [ID: {workout_id}]")
+                else:
+                    print("  (No workout templates found)")
+
             return workouts
         except Exception as e:
-            print(f"[ERROR] Failed to list workouts: {e}")
+            if not silent:
+                print(f"[ERROR] Failed to list workouts: {e}")
             return []
 
     def upload_workout(self, workout_data: Dict, return_id: bool = False):
@@ -133,7 +155,7 @@ class GarminClient:
             elif isinstance(schedules, dict):
                 return [schedules]
             return []
-        except Exception as e:
+        except Exception:
             # Silently fail - this is expected if no workouts are scheduled
             return []
 
@@ -156,14 +178,89 @@ class GarminClient:
             url = f"{self.client.garmin_workouts}/schedule/{workout_id}"
             self.client.garth.delete("connectapi", url, api=True)
             return True
-        except Exception as e:
+        except Exception:
             # Try alternate format with date
             try:
                 url = f"{self.client.garmin_workouts}/schedule/{workout_id}/{date_str}"
                 self.client.garth.delete("connectapi", url, api=True)
                 return True
-            except:
+            except Exception:
                 return False
+
+    def delete_workout(self, workout_id: int) -> bool:
+        """Delete a workout template entirely from Garmin Connect.
+
+        Args:
+            workout_id: ID of the workout template to delete
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.client:
+            if not self.connect():
+                return False
+
+        try:
+            url = f"{self.client.garmin_workouts}/workout/{workout_id}"
+            self.client.garth.delete("connectapi", url, api=True)
+            return True
+        except Exception:
+            return False
+
+    def cleanup_old_workouts(self, days_threshold: int = 7) -> int:
+        """Delete old workout templates that match our naming pattern.
+
+        This helps prevent clutter by removing workout templates from previous weeks.
+        Only deletes workouts with names like "Week X - Day - Type".
+
+        Args:
+            days_threshold: Delete workouts older than this many days (default: 7)
+
+        Returns:
+            Number of workouts deleted
+        """
+        if not self.client:
+            if not self.connect():
+                return 0
+
+        try:
+            from datetime import datetime, timedelta
+            import re
+
+            # Get all workouts using working API endpoint (silently)
+            workouts = self.list_workouts(limit=100, silent=True)
+            deleted_count = 0
+            cutoff_date = datetime.now() - timedelta(days=days_threshold)
+
+            for workout in workouts:
+                workout_name = workout.get('workoutName', '')
+                workout_id = workout.get('workoutId')
+
+                # Only delete workouts that match our naming pattern
+                # Pattern: "Week X - dayname - Type"
+                if not re.match(r'^Week \d+ - \w+ - ', workout_name):
+                    continue
+
+                # Check if workout was created/updated before cutoff
+                updated_date_str = workout.get('updated')
+                if updated_date_str:
+                    # Parse ISO date format
+                    try:
+                        # Garmin uses ISO format like "2025-10-19T12:00:00.0"
+                        updated_date = datetime.fromisoformat(updated_date_str.replace('Z', '+00:00').split('.')[0])
+
+                        if updated_date < cutoff_date:
+                            if self.delete_workout(workout_id):
+                                deleted_count += 1
+                                print(f"  [DELETED] {workout_name}")
+                    except:
+                        # Skip if we can't parse the date
+                        continue
+
+            return deleted_count
+        except Exception as e:
+            print(f"[WARNING] Cleanup encountered error: {e}")
+            return 0
 
     def upload_and_schedule_workout(self, workout_data: Dict, date_str: str, replace_existing: bool = True) -> bool:
         """Upload a workout and immediately schedule it to a date.
@@ -224,6 +321,40 @@ class GarminClient:
             print(f"[ERROR] Failed to schedule workout: {e}")
             return False
 
+    def _get_garmin_sport_type(self, sport_type_key: str) -> Dict:
+        """Convert sport type to Garmin sport type structure.
+
+        Args:
+            sport_type_key: Internal sport type key
+
+        Returns:
+            Garmin sport type dictionary with sportTypeId and sportTypeKey
+        """
+        # Map to Garmin sport type keys
+        garmin_sport_key_map = {
+            "running": "running",
+            "treadmill_running": "running",
+            "classic_skiing_ws": "cross_country_skiing_ws",
+            "indoor_rowing": "indoor_rowing",
+            "other": "other"
+        }
+        garmin_sport_key = garmin_sport_key_map.get(sport_type_key, "other")
+
+        # Sport type IDs vary, but the key is more important for API
+        sport_type_id_map = {
+            "running": 1,
+            "cross_country_skiing_ws": 20,
+            "indoor_rowing": 15,
+            "other": 0
+        }
+        sport_type_id = sport_type_id_map.get(garmin_sport_key, 0)
+
+        return {
+            "sportTypeId": sport_type_id,
+            "sportTypeKey": garmin_sport_key,
+            "displayOrder": 1
+        }
+
     def _format_for_garmin(self, workout_data: Dict) -> Dict:
         """Convert workout data to Garmin Connect format.
 
@@ -239,6 +370,9 @@ class GarminClient:
         # Map sport type to Garmin sport type key
         sport_type_map = {
             "running": "running",
+            "treadmill_running": "running",
+            "classic_skiing_ws": "cross_country_skiing_ws",
+            "indoor_rowing": "indoor_rowing",
             "other": "other"
         }
 
@@ -271,12 +405,7 @@ class GarminClient:
         """
         # Get sport type with proper structure
         sport_type_key = workout_data.get("sport_type", "running")
-        sport_type_id = 1 if sport_type_key == "running" else 0
-        sport_type = {
-            "sportTypeId": sport_type_id,
-            "sportTypeKey": sport_type_key,
-            "displayOrder": 1
-        }
+        sport_type = self._get_garmin_sport_type(sport_type_key)
 
         # All steps go in one segment
         all_steps = []
@@ -434,12 +563,7 @@ class GarminClient:
 
         # Get sport type with proper structure
         sport_type_key = workout_data.get("sport_type", "running")
-        sport_type_id = 1 if sport_type_key == "running" else 0
-        sport_type = {
-            "sportTypeId": sport_type_id,
-            "sportTypeKey": sport_type_key,
-            "displayOrder": 1
-        }
+        sport_type = self._get_garmin_sport_type(sport_type_key)
 
         return [{
             "segmentOrder": 1,

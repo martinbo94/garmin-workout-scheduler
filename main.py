@@ -124,6 +124,149 @@ def list_workouts():
     client.list_workouts(10)
 
 
+def schedule_current_week():
+    """Schedule workouts for the current week only with automatic cleanup."""
+    load_dotenv(override=True)
+    from datetime import datetime, timedelta
+
+    email = os.getenv("GARMIN_EMAIL")
+    password = os.getenv("GARMIN_PASSWORD")
+
+    if not email or not password:
+        print("✗ Error: GARMIN_EMAIL and GARMIN_PASSWORD must be set in .env file")
+        return
+
+    # Configuration
+    DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+    # Get current week number from config
+    week_number = config.get_current_week()
+
+    # Calculate Monday of current week
+    today = datetime.now()
+    days_since_monday = today.weekday()  # 0 = Monday, 6 = Sunday
+    monday_this_week = today - timedelta(days=days_since_monday)
+
+    print(f"\n{'='*60}")
+    print(f"SCHEDULING CURRENT WEEK")
+    print(f"{'='*60}")
+    print(f"Week {week_number} of training program")
+    print(f"Monday: {monday_this_week.strftime('%A, %B %d, %Y')}")
+    print(f"{'='*60}\n")
+
+    # Load program
+    try:
+        program = load_program("program.json")
+        print(f"✓ Loaded program: {program.program_name}")
+    except Exception as e:
+        print(f"✗ Failed to load program: {e}")
+        return
+
+    # Initialize generator
+    max_hr = config.MAX_HEART_RATE
+    generator = WorkoutGenerator(program, max_hr)
+
+    # Connect to Garmin
+    print(f"\nConnecting to Garmin Connect...")
+    client = GarminClient(email, password)
+    if not client.connect():
+        print("\n✗ Failed to connect to Garmin Connect")
+        return
+
+    # Cleanup old workouts first
+    print(f"\n{'='*60}")
+    print("CLEANING UP OLD WORKOUTS")
+    print(f"{'='*60}")
+    deleted_count = client.cleanup_old_workouts(days_threshold=7)
+    if deleted_count > 0:
+        print(f"✓ Removed {deleted_count} old workout template(s)")
+    else:
+        print("✓ No old workouts to clean up")
+
+    # Prompt for modality choices for flexible days
+    print(f"\n{'='*60}")
+    print("CHOOSE MODALITIES FOR THIS WEEK")
+    print(f"{'='*60}")
+    print("Select workout type for flexible endurance/long run days:\n")
+
+    modality_choices = {}
+    for day_name in ['wednesday', 'saturday', 'sunday']:
+        print(f"{day_name.upper()}:")
+        print(f"  1) Ski erg (indoor rowing)")
+        print(f"  2) Roller ski / Classic skiing")
+        print(f"  3) Running")
+        choice = input(f"  Enter choice (1-3): ").strip()
+
+        if choice == '1':
+            modality_choices[day_name] = 'indoor_rowing'
+        elif choice == '2':
+            modality_choices[day_name] = 'classic_skiing_ws'
+        elif choice == '3':
+            modality_choices[day_name] = 'running'
+        else:
+            print(f"  Invalid choice, defaulting to roller ski")
+            modality_choices[day_name] = 'classic_skiing_ws'
+        print()
+
+    # Generate and schedule workouts
+    print(f"\n{'='*60}")
+    print(f"GENERATING & SCHEDULING WORKOUTS")
+    print(f"{'='*60}\n")
+
+    total_workouts = 0
+    successful_uploads = 0
+
+    for day_index, day_name in enumerate(DAYS):
+        workout_date = monday_this_week + timedelta(days=day_index)
+        date_str = workout_date.strftime("%Y-%m-%d")
+
+        print(f"{day_name.upper()} ({workout_date.strftime('%b %d')}):")
+
+        # Get sport type override if this is a flexible day
+        sport_type_override = modality_choices.get(day_name)
+
+        # Generate workouts for this day
+        workouts = generator.generate_day(day_name, week_number, sport_type_override)
+
+        if not workouts:
+            print(f"  [REST DAY]\n")
+            continue
+
+        for workout in workouts:
+            # Skip strength workouts (we don't need them on watch)
+            if workout.get('workout_type') == 'strength':
+                print(f"  {workout['workout_name']} - [SKIPPED - Strength workout]")
+                continue
+
+            total_workouts += 1
+            workout_name = workout['workout_name']
+            print(f"  {workout_name}")
+
+            # Upload and schedule
+            if client.upload_and_schedule_workout(workout, date_str):
+                successful_uploads += 1
+                print(f"    ✓ Scheduled for {date_str}")
+            else:
+                print(f"    ✗ Failed to schedule")
+
+        print()
+
+    # Summary
+    print(f"{'='*60}")
+    print(f"SUMMARY")
+    print(f"{'='*60}")
+    print(f"Total workouts: {total_workouts}")
+    print(f"Successfully scheduled: {successful_uploads}")
+    print(f"Failed: {total_workouts - successful_uploads}")
+    print(f"{'='*60}")
+    print(f"\n✓ Week {week_number} is now scheduled on your Garmin!")
+    print(f"✓ Check Garmin Connect: Training > Calendar")
+    print(f"✓ Your watch will suggest these workouts automatically")
+    print(f"   when you start the matching activity type.")
+    print(f"\n💡 Tip: Run this script again next week to schedule Week {week_number + 1}")
+    print(f"{'='*60}\n")
+
+
 def schedule_training_plan():
     """Upload and schedule all workouts for multiple weeks as a training plan."""
     load_dotenv(override=True)
@@ -271,7 +414,8 @@ def schedule_training_plan():
 if __name__ == "__main__":
     # Uncomment the function you want to run:
 
-    # main()  # Generate and upload workouts for the week
+    # main()  # Generate and upload workouts for the week (old method)
     # test_connection()  # Test Garmin connection
     # list_workouts()  # List existing workouts
-    schedule_training_plan()  # Upload and schedule multi-week training plan
+    schedule_current_week()  # Schedule current week with automatic cleanup (recommended)
+    # schedule_training_plan()  # Upload and schedule multi-week training plan
