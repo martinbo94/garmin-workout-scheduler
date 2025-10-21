@@ -15,20 +15,20 @@
           "modality": "treadmill_running",
           "duration_min": 60,
           "structure": {
-            "warmup_duration_min": 15,
+            "warmup_duration_min": 10,
             "warmup_intensity_zone": 2,
             "main_set_variants": [
               {
                 "variant": "A",
                 "intervals": 4,
                 "work_duration_min": 6,
-                "rest_duration_min": 3
+                "rest_duration_min": 2
               },
               {
                 "variant": "B",
                 "intervals": 5,
                 "work_duration_min": 5,
-                "rest_duration_min": 2.5
+                "rest_duration_min": 2
               },
               {
                 "variant": "C",
@@ -40,11 +40,10 @@
                 "variant": "D",
                 "intervals": 4,
                 "work_duration_min": 8,
-                "rest_duration_min": 4
+                "rest_duration_min": 2
               }
             ],
             "work_intensity_zones": [4, 5],
-            "work_intensity_typical": "90-95",
             "rest_intensity_zones": [1, 2],
             "cooldown_duration_min": 10,
             "cooldown_intensity_zones": [1, 2]
@@ -52,24 +51,17 @@
         },
         {
           "part": 2,
-          "type": "strength_heavy",
-          "duration_min": 45,
-          "exercises": [
-            {"name": "Pullups", "sets": 4, "reps": "6-8"},
-            {"name": "Dips/Bench_press", "sets": 4, "reps": "6-8"},
-            {"name": "Shoulder_press", "sets": 3, "reps": "8"},
-            {"name": "Weighted_plank", "sets": 3, "duration_sec": "45-60"},
-            {"name": "Pallof_press", "sets": 3, "reps": "10 each side"}
-          ],
-          "rest_between_sets_min": 2.5
+          "type": "strength",
+          "duration_min": 45
         }
       ]
     },
     "wednesday": {
       "workout_type": "easy_endurance",
       "duration_min": 55,
+      "duration_display": "45-60min",
       "intensity_zones": [1, 2],
-      "modality": "flexible"
+      "modality": "running"
     },
     "thursday": {
       "workout_type": "vo2max_intervals_and_strength",
@@ -80,20 +72,20 @@
           "modality": "treadmill_running",
           "duration_min": 60,
           "structure": {
-            "warmup_duration_min": 15,
+            "warmup_duration_min": 10,
             "warmup_intensity_zone": 2,
             "main_set_variants": [
               {
                 "variant": "A",
                 "intervals": 4,
                 "work_duration_min": 6,
-                "rest_duration_min": 3
+                "rest_duration_min": 2
               },
               {
                 "variant": "B",
                 "intervals": 5,
                 "work_duration_min": 5,
-                "rest_duration_min": 2.5
+                "rest_duration_min": 2
               },
               {
                 "variant": "C",
@@ -105,11 +97,10 @@
                 "variant": "D",
                 "intervals": 4,
                 "work_duration_min": 8,
-                "rest_duration_min": 4
+                "rest_duration_min": 2
               }
             ],
             "work_intensity_zones": [4, 5],
-            "work_intensity_typical": "90-95",
             "rest_intensity_zones": [1, 2],
             "cooldown_duration_min": 10,
             "cooldown_intensity_zones": [1, 2]
@@ -118,17 +109,8 @@
         },
         {
           "part": 2,
-          "type": "strength_endurance",
-          "duration_min": 40,
-          "exercises": [
-            {"name": "Poling_with_bands", "sets": 3, "reps": "20-30"},
-            {"name": "Rows_high_reps", "sets": 3, "reps": "15-20"},
-            {"name": "Triceps_extensions", "sets": 3, "reps": "15"},
-            {"name": "Mountain_climbers", "sets": 3, "duration_sec": "60"},
-            {"name": "Side_plank", "sets": 3, "duration_sec": "60 each side"},
-            {"name": "Box_jumps", "sets": 3, "reps": "8", "optional": true}
-          ],
-          "rest_between_sets_min": 1.25
+          "type": "strength",
+          "duration_min": 40
         }
       ]
     },
@@ -139,7 +121,7 @@
     "saturday": {
       "workout_type": "threshold_intervals",
       "duration_min": 65,
-      "modality": "flexible",
+      "modality": "ski_erg",
       "structure": {
         "warmup_duration_min": 15,
         "warmup_intensity_zone": 2,
@@ -158,7 +140,6 @@
           }
         ],
         "work_intensity_zones": [3, 4],
-        "work_intensity_typical": "85-90",
         "rest_intensity_zones": [1, 2],
         "cooldown_duration_min": 10,
         "cooldown_intensity_zones": [1, 2]
@@ -167,8 +148,9 @@
     "sunday": {
       "workout_type": "long_run",
       "duration_min": 85,
+      "duration_display": "60-120min",
       "intensity_zones": [1, 2],
-      "modality": "flexible"
+      "modality": "running"
     }
   },
   "periodization": {
@@ -199,7 +181,7 @@
   "heart_rate_zones": {
     "zone_1": {
       "name": "Very_easy",
-      "percent_min": 60,
+      "percent_min": 55,
       "percent_max": 72,
       "description": "Recovery_intensity"
     },

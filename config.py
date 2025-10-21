@@ -8,12 +8,16 @@ MAX_HEART_RATE = 212
 # Format: "YYYY-MM-DD"
 PROGRAM_START_DATE = "2025-10-19"
 
+# Sport type options are no longer needed - workouts are now hardcoded
+# Wednesday & Sunday: running (calendar reminders only)
+# Saturday: ski_erg (mapped to cardio in Garmin API)
+
 
 def get_current_week() -> int:
     """Calculate current week number based on start date.
 
     Returns:
-        Week number (1-12)
+        Week number (1-N where N is program.duration_weeks)
     """
     if PROGRAM_START_DATE is None:
         # If no start date set, use current week as week 1
@@ -26,7 +30,8 @@ def get_current_week() -> int:
     days_elapsed = (today - start_date).days
     weeks_elapsed = days_elapsed // 7
 
-    # Week number (1-12, cycles if beyond 12)
+    # Week number (cycles based on program duration - default 12)
+    # Note: This assumes 12-week cycle. For dynamic cycling, load program.duration_weeks
     week_num = (weeks_elapsed % 12) + 1
 
     return week_num

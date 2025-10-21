@@ -42,8 +42,7 @@ class IntervalStructure(BaseModel):
     warmup_duration_min: int
     warmup_intensity_zone: int
     main_set_variants: List[IntervalVariant]
-    work_intensity_zones: List[int]
-    work_intensity_typical: str  # e.g., "90-95"
+    work_intensity_zones: List[int]  # e.g., [4, 5] for VO2max, [3, 4] for threshold
     rest_intensity_zones: List[int]
     cooldown_duration_min: int
     cooldown_intensity_zones: List[int]
@@ -65,6 +64,7 @@ class DayWorkout(BaseModel):
     """Single day's workout."""
     workout_type: str
     duration_min: Optional[int] = None
+    duration_display: Optional[str] = None  # e.g., "45-60min" for flexible duration
     intensity_zones: Optional[List[int]] = None
     intensity_percent_max_hr: Optional[str] = None
     modality: Optional[str] = None
