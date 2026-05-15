@@ -39,6 +39,40 @@ _USER_PROFILE_PATH = _COACH_DATA / "user_profile.md"
 _USER_PROFILE_EXAMPLE_PATH = _COACH_DATA / "examples" / "user_profile.example.md"
 
 
+# ─── Resource-equivalent tools (for clients that don't auto-load resources)
+@mcp.tool()
+def read_coach_doc(name: Literal["user_profile", "training_philosophy", "classification", "plan_design"]) -> str:
+    """Read one of the coach:// markdown docs as a tool call.
+
+    Functionally equivalent to reading the corresponding `coach://` MCP
+    resource, but works in clients that don't autonomously read resources
+    (Claude Desktop, most API integrations).
+
+    Read this whenever you need:
+    - 'user_profile' — the athlete's max HR, zone boundaries, race PRs,
+      lactate test data, derived HR target bands.
+    - 'training_philosophy' — the Bakken Norwegian threshold framework,
+      session formats, weekly structure, recovery cues.
+    - 'classification' — workout type rules, naming conventions, target
+      zone distribution bands for weekly summaries.
+    - 'plan_design' — structural reference for designing a multi-week
+      training block. Read before drafting `plan.json`: block archetypes,
+      X-økt rotation, weekly templates, race-prep 12-week structure.
+
+    A good pattern at the start of a coaching conversation is to read
+    'user_profile' + 'training_philosophy' before answering anything that
+    depends on the athlete's thresholds or framework. Read 'plan_design'
+    additionally when drafting or revising a training block.
+    """
+    paths = {
+        "user_profile": _USER_PROFILE_PATH,
+        "training_philosophy": _COACH_DATA / "training_philosophy.md",
+        "classification": _COACH_DATA / "classification.md",
+        "plan_design": _COACH_DATA / "plan_design.md",
+    }
+    return paths[name].read_text(encoding="utf-8")
+
+
 # ─── First-time profile setup ──────────────────────────────────────────
 _PROFILE_SETUP_QUESTIONS = [
     {
@@ -323,6 +357,21 @@ def training_philosophy() -> str:
     individual workouts and individual weeks.
     """
     return (_COACH_DATA / "training_philosophy.md").read_text(encoding="utf-8")
+
+
+@mcp.resource("coach://plan_design")
+def plan_design() -> str:
+    """Structural reference for designing a multi-week training block.
+
+    Read this before drafting plan.json. Covers block archetypes (flat /
+    block periodization / progressive X-økt), the X-økt rotation menu,
+    Bakken's reference 5-hour weekly template, intensity distribution
+    targets for 4-6 h/week amateurs, four load-increase options, a
+    race-prep 12-week template, and the multi-block periodization
+    staircase. Separate concern from training_philosophy.md (the
+    framework) and user_profile.md (the athlete's numbers).
+    """
+    return (_COACH_DATA / "plan_design.md").read_text(encoding="utf-8")
 
 
 # ─── Auth ──────────────────────────────────────────────────────────────
@@ -947,6 +996,46 @@ def activity_breakdown(activity_id: int) -> dict:
     If the activity isn't in the cache, run `sync_activities` first.
     """
     return strava_sync.activity_breakdown(activity_id)
+
+
+@mcp.tool()
+def get_wellness_history(
+    start_date: str,
+    end_date: str,
+    force_refetch: bool = False,
+) -> dict:
+    """Historical daily wellness metrics (HRV, RHR, sleep, stress, body battery)
+    with rolling averages.
+
+    On first call for a date, the daily metrics are pulled from Garmin and
+    cached in coach_data/cache.db. Subsequent calls in the same range read
+    from the cache and are fast. A first 90-day backfill takes ~30-60s.
+
+    Rolling averages:
+    - **RHR:** simple 7-day mean (it's a low-noise signal).
+    - **HRV:** 7-day **geometric mean** (mean of ln(HRV), exp back).
+      HRV is roughly log-normally distributed; this is the right shape
+      per Altini's research and what HRV4Training uses.
+
+    Args:
+        start_date: 'YYYY-MM-DD' (inclusive).
+        end_date:   'YYYY-MM-DD' (inclusive).
+        force_refetch: If True, re-pull all days from Garmin even if cached.
+
+    Returns dict with:
+      - range: start/end/days
+      - daily: list of {date, resting_hr, hrv_overnight_avg, hrv_status,
+        hrv_baseline_low/upper, sleep_seconds, avg_stress, body_battery_*}
+      - rolling: list of {date, rhr_7d_mean, hrv_7d_geomean}
+      - summary: min/max/mean for RHR and HRV across the range, plus the
+        most recent Garmin "balanced HRV" baseline band for context
+    """
+    sync_result = strava_sync.sync_wellness_range(
+        _client(), start_date, end_date, force_refetch=force_refetch
+    )
+    data = strava_sync.wellness_history(start_date, end_date)
+    data["sync"] = sync_result
+    return data
 
 
 @mcp.tool()
