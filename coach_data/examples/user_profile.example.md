@@ -6,124 +6,119 @@ values. The agent reads it as the `coach://user_profile` resource.
 The bpm targets that the framework references (sub-threshold band, easy
 run cap, VO2 band) are all derived from the values you fill in below.
 
-## Maximum heart rate
+## Max HR
 
 **XXX bpm**
 
-If you don't know your max HR, the standard `220 − age` estimate is a
-rough start but typically underestimates well-trained runners. A flat-out
-5k or hill repeats will get you closer.
+If you don't know your max HR, `220 − age` is a rough start but typically
+underestimates well-trained runners. A flat-out 5k or hill repeats will
+get you closer.
 
-## VO2max / lactate test results (optional)
+## VO2max test (optional)
 
 If you've had a treadmill lactate profile, record key results. The Bakken
-sub-threshold band is most precisely derived from your lactate test
-points (interpolating where 2.3 and 3.0 mmol fall on your HR curve).
-Without a test, fall back to the 80-87% max HR rule.
+sub-threshold band is most precisely derived from a lactate test
+(interpolating where 2.3 and 3.0 mmol fall on your HR curve). Without a
+test, fall back to the 80-87% max HR rule.
 
 | Metric | Value |
 |---|---|
 | VO2max | XX ml/min/kg |
 | Weight | XX kg |
-| Max HR (test) | XXX |
 | Max lactate | X.X mmol |
+| **LT2 HR** (~4 mmol) | **XXX bpm** |
+| **LT1 HR** (~2.3 mmol) | **XXX bpm** |
 | Utilization at LT2 | XX% |
-| LT2 HR (classical 4 mmol) | XXX bpm |
-| LT1 HR | XXX bpm, X.X mmol |
-| Bakken sub-threshold zone (2.3 – 3.0 mmol) | ~XXX – XXX bpm |
+| Bakken sub-threshold zone (2.3-3.0 mmol) | ~XXX-XXX bpm |
 
-### Test caveats
+**Test day caveat:** note conditions that might bias the result
+(treadmill vs outdoor, fatigue, sleep, recent training load). HR
+thresholds are intrinsic and reliable; pace numbers are more conditional.
 
-Note conditions that might bias the result (treadmill vs outdoor,
-fatigue, sleep, recent training load). The HR thresholds are intrinsic
-and reliable; pace numbers are more conditional.
+## HR zones (from Garmin Connect)
 
-## HR zone system
+Copy bpm ranges verbatim. Don't recompute from a formula — let the
+device's own rounding stand.
 
-Copy bpm ranges from Garmin Connect (or equivalent) verbatim. Don't
-recompute from a formula — let the device's own rounding stand.
-
-| Zone | bpm range | Description |
-|------|-----------|-------------|
-| Z1 | XXX – XXX | Very easy / recovery |
-| Z2 | XXX – XXX | Easy / aerobic base |
-| Z3 | XXX – XXX | Moderate / tempo |
-| Z4 | XXX – XXX | Threshold |
+| Zone | bpm | Description |
+|---|---|---|
+| Z1 | XXX–XXX | Very easy / recovery |
+| Z2 | XXX–XXX | Easy / aerobic base |
+| Z3 | XXX–XXX | Moderate / tempo |
+| Z4 | XXX–XXX | Threshold |
 | Z5 | ≥ XXX | VO2max |
 
-Ranges are inclusive integer intervals (HR at the upper bound belongs to
-the lower zone).
+To update: Garmin Connect → Settings → User Settings → Heart Rate Zones,
+copy verbatim.
 
-### Updating
+## Quality session HR targets
 
-When max HR changes or zones recalibrate:
-1. Open Garmin Connect → Settings → User Settings → Heart Rate Zones.
-2. Copy the bpm ranges into the table above verbatim.
-3. Update the max HR value at the top.
-
-## Quality session HR targets (primary intensity signal)
-
-Drive sessions from HR, not pace. These are derived from your test (or
-estimated from max HR). See `coach://training_philosophy` for the rules
-behind them.
-
-### Easy / aerobic base
-- **Average HR in Z1 / low-mid Z2.**
-- **Hard cap: your LT1** (or ~84% of max HR if untested).
-- HR drift on long runs is normal; brief excursions over LT1 for hills
-  are fine. Routine drift above LT1 is gray-zone territory.
-
-### Threshold reps (Bakken sub-threshold)
+Drive sessions from HR, not pace.
 
 | Session type | Target HR | Notes |
 |---|---|---|
-| All sub-threshold work | **XXX – XXX bpm** (your band) | Same band for any rep length — long reps and short reps share the same HR target. |
-| Hard cap | **XXX bpm** (3-bpm buffer below LT2) | Above this you're at-threshold, not sub-threshold. |
-| VO2 / X element | **~92 – 96% of max HR** | 0-1× per 7-10 days, only when fresh. |
-
-The sub-threshold band is typically meaningfully lower than conventional
-"threshold work" guidance (which targets ~4 mmol / 91-93% max HR). See
-`coach://training_philosophy` for why.
+| Easy / aerobic base | avg in Z1 / low-mid Z2 | **Hard cap: LT1.** Drifting above LT1 = gray zone. |
+| **Sub-threshold** (any rep length) | **XXX-XXX bpm** | Bakken Golden Zone. Same band whether long reps or short reps — short reps just allow faster *pace* at same HR. |
+| Hard cap above sub-threshold | XXX bpm | 3-bpm buffer below LT2 for HR lag. |
+| VO2 / X-element | ~92-96% max HR | 0-1× per 7-10 days, fresh days only. |
 
 ## Race PRs
 
 Real-world fitness anchors. Add as you set them.
 
-| Distance | Time | Pace | Notes |
-|---|---|---|---|
-| 5k | — | — | |
-| 10k | — | — | |
-| HM | — | — | |
-| Marathon | — | — | |
-
-## Pace ↔ HR mapping (optional, from lactate test)
-
-If you have a treadmill lactate profile, record the data points. Used for
-estimating distance when planning time-based workouts.
-
-| Speed | Pace | HR | Lactate | Zone |
+| Distance | Time | Pace | Date | Notes |
 |---|---|---|---|---|
-| X.X km/h | X:XX/km | XXX | X.X mmol | ZX |
+| 5k | — | — | — | |
+| 10k | — | — | — | |
+| HM | — | — | — | |
+| Marathon | — | — | — | |
 
-Note that treadmill pace may underestimate outdoor pace at the same HR.
-Cross-check against your actual outdoor runs as data accumulates.
+## Athlete profile
 
-## Distance estimation rules of thumb
+Pick the one that matches your test + race history (see
+`coach://plan_design` for the full taxonomy):
 
-For planning weekly mileage. Calibrate these once you've logged a few
-weeks of real outdoor data.
+- **Profile A: VO2-strong / utilization-weak** — high VO2max relative to
+  race times, low utilization at LT2 (< 80%). Limiter is threshold
+  endurance. Bias X-økt toward sub-threshold variation, not VO2.
+- **Profile B: utilization-strong / VO2-weak** — already squeezing most
+  of your VO2max at threshold (utilization > 85%) but VO2max is the
+  ceiling. Limiter is aerobic ceiling. VO2 work matters more.
+- **Profile C: balanced** — no clear bottleneck. Standard mix.
 
-- **Easy run:** ~6:00 – 7:00 /km outdoor, depending on fitness and terrain.
-- **Threshold reps (sub-threshold band):** roughly 10-15 seconds per km
-  slower than 5k pace, or 2-4% slower than threshold pace.
-- **VO2 reps:** roughly 5k pace ± a few seconds, depending on rep length.
-- **Long run:** all easy.
+## Session pace estimates (conservative, training-day)
 
-## Recent outdoor data points
+Concrete pace targets per effort type. Used to estimate distance for
+time-based workouts so weekly mileage stays accurate.
 
-Track real outdoor runs that anchor what your true bands look like in
-field conditions. Useful when treadmill test data and outdoor reality
-diverge.
+| Effort | Outdoor pace | Used for |
+|---|---|---|
+| Easy / WU / CD / Long | X:XX/km | All Z1-Z2 work |
+| **Sub-threshold** | **X:XX-X:XX/km** | Bakken threshold reps (cornerstone) |
+| At-threshold (rare) | X:XX/km | ~1 hr sustainable. Outside Bakken default. |
+| VO2 / X-element | X:XX/km | Around 5k race pace. Fresh days only. |
 
-| Date | Distance | Avg HR | Avg pace | Notes |
+Bands assume normal training conditions. Race-day pace runs faster.
+
+If untested, rough rules of thumb:
+- **Sub-threshold:** ~10-15 sec/km slower than 5k pace.
+- **VO2 reps:** ~5k pace.
+- **Easy:** conversational, well below sub-threshold.
+
+## Pace ↔ HR mapping (treadmill test, low confidence)
+
+If you have a treadmill lactate profile, record the data points. Note
+that **outdoor paces at the same HR are typically faster** than
+treadmill — cross-check against real outdoor runs as data accumulates.
+
+| Speed | Pace | HR | Lactate |
+|---|---|---|---|
+| X.X km/h | X:XX/km | XXX | X.X mmol |
+
+### Recent outdoor data points
+
+Real outdoor runs that anchor what your true bands look like in field
+conditions. Useful when treadmill test data and outdoor reality diverge.
+
+| Date | Distance | Avg HR | Pace | Notes |
 |---|---|---|---|---|
