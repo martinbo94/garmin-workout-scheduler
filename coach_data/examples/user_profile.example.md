@@ -108,15 +108,27 @@ estimating distance when planning time-based workouts.
 Note that treadmill pace may underestimate outdoor pace at the same HR.
 Cross-check against your actual outdoor runs as data accumulates.
 
+## Session pace estimates (for distance budgeting)
+
+Concrete pace targets per effort type. Used by the agent to estimate
+distance for time-based workouts (e.g. "10 min WU + 5×6 min threshold +
+10 min CD" → total km), so weekly mileage estimates stay accurate.
+
+| Effort | Outdoor pace | Used for |
+|---|---|---|
+| Easy / WU / CD / Long | X:XX/km | All Z1-Z2 work — easy runs, long runs, warmup, cooldown, recovery jogs |
+| Sub-threshold | X:XX/km | Bakken threshold reps (the cornerstone) |
+| At-threshold | X:XX/km | One-off harder sessions |
+| VO2 / X element | X:XX/km | Top-end intervals, rare |
+
+Fill in the ones you know. If untested, rough rules of thumb:
+- **Sub-threshold:** ~10-15 sec/km slower than 5k pace, or 2-4% slower
+  than threshold pace.
+- **VO2 reps:** ~5k pace ± a few seconds, depending on rep length.
+- **Easy:** somewhere between long-run pace and steady tempo's "easier"
+  bound. Whatever feels conversational.
+
 ## Distance estimation rules of thumb
-
-For planning weekly mileage. Calibrate these once you've logged a few
-weeks of real outdoor data.
-
-- **Easy run:** ~6:00 – 7:00 /km outdoor, depending on fitness and terrain.
-- **Threshold reps (sub-threshold band):** roughly 10-15 seconds per km
-  slower than 5k pace, or 2-4% slower than threshold pace.
-- **VO2 reps:** roughly 5k pace ± a few seconds, depending on rep length.
 - **Long run:** all easy.
 
 ## Recent outdoor data points

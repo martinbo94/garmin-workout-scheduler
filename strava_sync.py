@@ -99,6 +99,22 @@ CREATE TABLE IF NOT EXISTS sync_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS wellness_daily (
+    date TEXT PRIMARY KEY,
+    resting_hr INTEGER,
+    hrv_overnight_avg INTEGER,
+    hrv_weekly_avg INTEGER,
+    hrv_status TEXT,
+    hrv_baseline_low INTEGER,
+    hrv_baseline_upper INTEGER,
+    sleep_seconds INTEGER,
+    avg_stress INTEGER,
+    body_battery_high INTEGER,
+    body_battery_low INTEGER,
+    body_battery_at_wake INTEGER,
+    synced_at TEXT NOT NULL
+);
 """
 
 
@@ -396,6 +412,184 @@ def weekly_summary(start_date: str, end_date: str) -> list[dict]:
         bucket["session_count"] += 1
 
     return list(weeks.values())
+
+
+# ─── Wellness history (HRV, RHR, sleep, stress, body battery) ────────
+import math as _math
+
+
+def _fetch_wellness_day(garmin_client, date_str: str) -> dict:
+    """Pull HRV + daily-stats wellness metrics for one date. Tolerates missing
+    fields — Garmin returns nulls for days without watch wear / sync."""
+    out: dict = {"date": date_str}
+
+    try:
+        h = garmin_client.get_hrv_data(date_str)
+        if h and isinstance(h, dict) and h.get("hrvSummary"):
+            s = h["hrvSummary"]
+            out["hrv_overnight_avg"] = s.get("lastNightAvg")
+            out["hrv_weekly_avg"] = s.get("weeklyAvg")
+            out["hrv_status"] = s.get("status")
+            base = s.get("baseline") or {}
+            out["hrv_baseline_low"] = base.get("balancedLow")
+            out["hrv_baseline_upper"] = base.get("balancedUpper")
+    except Exception:
+        pass
+
+    try:
+        s = garmin_client.get_stats(date_str)
+        if s and isinstance(s, dict):
+            out["resting_hr"] = s.get("restingHeartRate")
+            out["sleep_seconds"] = s.get("sleepingSeconds")
+            out["avg_stress"] = s.get("averageStressLevel")
+            out["body_battery_high"] = s.get("bodyBatteryHighestValue")
+            out["body_battery_low"] = s.get("bodyBatteryLowestValue")
+            out["body_battery_at_wake"] = s.get("bodyBatteryAtWakeTime")
+    except Exception:
+        pass
+
+    return out
+
+
+def _wellness_day_cached(date_str: str) -> Optional[dict]:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM wellness_daily WHERE date = ?", (date_str,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def _save_wellness_day(row: dict) -> None:
+    cols = [
+        "date", "resting_hr", "hrv_overnight_avg", "hrv_weekly_avg",
+        "hrv_status", "hrv_baseline_low", "hrv_baseline_upper",
+        "sleep_seconds", "avg_stress",
+        "body_battery_high", "body_battery_low", "body_battery_at_wake",
+        "synced_at",
+    ]
+    vals = [row.get(c) for c in cols[:-1]] + [datetime.now(timezone.utc).isoformat()]
+    placeholders = ", ".join(["?"] * len(cols))
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            f"INSERT OR REPLACE INTO wellness_daily ({', '.join(cols)}) "
+            f"VALUES ({placeholders})",
+            vals,
+        )
+
+
+def sync_wellness_range(
+    garmin_client,
+    start_date: str,
+    end_date: str,
+    force_refetch: bool = False,
+) -> dict:
+    """Pull wellness for each date in range. Returns counts of cached/fetched/errors."""
+    _init_db()
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    if end < start:
+        raise ValueError("end_date must be on or after start_date")
+
+    cached = 0
+    fetched = 0
+    errors: list[str] = []
+    d = start
+    while d <= end:
+        ds = d.isoformat()
+        if not force_refetch and _wellness_day_cached(ds):
+            cached += 1
+        else:
+            try:
+                row = _fetch_wellness_day(garmin_client, ds)
+                _save_wellness_day(row)
+                fetched += 1
+                # Be polite to Garmin's rate limiter
+                time.sleep(0.2)
+            except Exception as e:
+                errors.append(f"{ds}: {type(e).__name__}: {e}")
+        d += timedelta(days=1)
+    return {"cached": cached, "fetched": fetched, "errors": errors}
+
+
+def _read_wellness_range(start_date: str, end_date: str) -> list[dict]:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT * FROM wellness_daily
+            WHERE date BETWEEN ? AND ?
+            ORDER BY date
+            """,
+            (start_date, end_date),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _rolling_averages(daily: list[dict], window: int = 7, min_data: int = 4) -> list[dict]:
+    """Compute rolling means.
+
+    - RHR: simple arithmetic 7-day mean.
+    - HRV: 7-day geometric mean (mean of ln(HRV), exp back). HRV is roughly
+      log-normally distributed so this is the right shape per HRV4Training /
+      Altini's research.
+    """
+    out: list[dict] = []
+    for i in range(len(daily)):
+        win_start = max(0, i - window + 1)
+        win = daily[win_start : i + 1]
+
+        rhr_vals = [w["resting_hr"] for w in win if w.get("resting_hr")]
+        rhr_mean = (
+            round(sum(rhr_vals) / len(rhr_vals), 1) if len(rhr_vals) >= min_data else None
+        )
+
+        hrv_vals = [w["hrv_overnight_avg"] for w in win if w.get("hrv_overnight_avg")]
+        if len(hrv_vals) >= min_data:
+            hrv_ln_mean = sum(_math.log(v) for v in hrv_vals) / len(hrv_vals)
+            hrv_geo_mean = round(_math.exp(hrv_ln_mean), 1)
+        else:
+            hrv_geo_mean = None
+
+        out.append({
+            "date": daily[i]["date"],
+            "rhr_7d_mean": rhr_mean,
+            "hrv_7d_geomean": hrv_geo_mean,
+        })
+    return out
+
+
+def wellness_history(start_date: str, end_date: str) -> dict:
+    """Read wellness range from cache, compute rolling averages, return shaped result."""
+    daily = _read_wellness_range(start_date, end_date)
+    rolling = _rolling_averages(daily)
+
+    # Summary stats
+    rhr_vals = [d["resting_hr"] for d in daily if d.get("resting_hr")]
+    hrv_vals = [d["hrv_overnight_avg"] for d in daily if d.get("hrv_overnight_avg")]
+    baseline_low = next(
+        (d["hrv_baseline_low"] for d in reversed(daily) if d.get("hrv_baseline_low")), None
+    )
+    baseline_upper = next(
+        (d["hrv_baseline_upper"] for d in reversed(daily) if d.get("hrv_baseline_upper")), None
+    )
+
+    return {
+        "range": {"start": start_date, "end": end_date, "days": len(daily)},
+        "daily": daily,
+        "rolling": rolling,
+        "summary": {
+            "rhr_days_with_data": len(rhr_vals),
+            "rhr_min": min(rhr_vals) if rhr_vals else None,
+            "rhr_max": max(rhr_vals) if rhr_vals else None,
+            "rhr_mean": round(sum(rhr_vals) / len(rhr_vals), 1) if rhr_vals else None,
+            "hrv_days_with_data": len(hrv_vals),
+            "hrv_min": min(hrv_vals) if hrv_vals else None,
+            "hrv_max": max(hrv_vals) if hrv_vals else None,
+            "hrv_mean": round(sum(hrv_vals) / len(hrv_vals), 1) if hrv_vals else None,
+            "hrv_baseline_band": [baseline_low, baseline_upper] if baseline_low else None,
+        },
+    }
 
 
 def activity_breakdown(activity_id: int) -> dict:
