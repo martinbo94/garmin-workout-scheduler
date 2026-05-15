@@ -92,19 +92,6 @@ worlds. The Golden Zone has high training effect at a recoverable cost.
 That's why Bakken says **"Du øker via volumet, ikke intensiteten"** —
 you progress by accumulating more time in this zone, not by going harder.
 
-### What this maps to for *this athlete*
-
-Interpolating from the 2026-05-01 test lactate profile (see
-`coach://user_profile` for the table):
-
-| Lactate | km/h | HR | What it is |
-|---|---|---|---|
-| 2.2 mmol | 9.0 | 170 | just below Bakken's floor |
-| **2.3 mmol** | ~9.1 | **~172** | sub-threshold floor |
-| 2.6 mmol | 10.0 | 185 | comfortably sub-threshold |
-| **3.0 mmol** | ~10.3 | **~188** | sub-threshold ceiling |
-| 4.0 mmol | 11.0 | 193 | classical LT2 (lab number) |
-
 ### Deriving your sub-threshold band
 
 Two rules, which should converge:
@@ -148,15 +135,6 @@ The point is *repeatability*, not heroics. A session that wrecks the next
 one is a net loss.
 
 ---
-
-## Re-validating threshold if the lab number feels off
-
-The user's LT2 is established from the 2026-05-01 lab test (194 bpm,
-2.3-3.0 mmol band ≈ 178-188 bpm sub-threshold; see `coach://user_profile`).
-If that ever feels off, Bakken's simplest field check is a **30-minute
-time trial**: highest sustainable tempo for 30 min, average HR over the
-last 20 min ≈ LT2. A recent 5k race time + Jack Daniels' VDOT table also
-works (sub-threshold pace ≈ T-pace + 6-12 sec/km).
 
 ## Rep-length pace adjustment (within the same HR target)
 
@@ -226,11 +204,11 @@ otherwise lose top-end feel on a heavy-sub-threshold block.
 
 ### Example sessions the user has used or might use
 
-- 5 × 6 min @ 191-194 bpm, 1 min jog rest — classic Bakken long-rep
-- 4 × 8 min @ 191-194 bpm, 90 s rest — slightly longer reps
-- 10 × 1 km @ ~5:00-5:10/km (LT2 pace), 60-90 s jog — high-turnover
-- 15 × 3 min @ 191-194 bpm, 30-60 s rest — Bakken's example for "increase
-  total dragtid" when threshold feels too easy
+- 5 × 6 min @ sub-threshold HR, 1 min jog rest — classic Bakken long-rep
+- 4 × 8 min @ sub-threshold HR, 90 s rest — slightly longer reps
+- 10 × 1 km @ sub-threshold pace, 60-90 s jog — high-turnover
+- 15 × 3 min @ sub-threshold HR, 30-60 s rest — Bakken's example for
+  "increase total dragtid" when threshold feels too easy
 - 45/15 × 20-30 min — short on/off at sub-threshold HR, not all-out
 
 ### 45/15 deserves a special note
@@ -315,32 +293,18 @@ The discipline is non-negotiable: **easy is truly easy**.
 > "I would entirely stay away from the zone in between very easy running
 > and the threshold."  — Bakken
 
-Bakken's elite athletes run easy below 70% of max HR — but that's
-because elites have excellent running economy. At a given pace, an
-amateur's HR is meaningfully higher. Trying to enforce 70% on an
-amateur often means walking. Use a more realistic interpretation:
+Bakken's elites run easy below 70% of max HR, but amateur economy makes
+that effectively walking pace. Practical interpretation:
 
-**Easy run targets (amateur-realistic):**
+- **Aim for average HR in Z1 or low-mid Z2.** Upward drift on long runs
+  is normal.
+- **Hard cap: LT1** (≈ 84% of max HR untested). Routine drift above LT1
+  is the gray zone — too hard to recover from, too easy to drive
+  adaptation.
+- **Purpose:** aerobic base, economy, recovery — not a moderate workout.
 
-- **Aim for average HR in Z1 or low-mid Z2.** HR drift upward on a long
-  run is normal — start low, end a bit higher, that's fine.
-- **Hard cap: your LT1** (or roughly 84% of max HR if untested). Going
-  above LT1 on an "easy" run means you're in aerobic-moderate territory
-  — the "gray zone" Bakken warns about. Brief excursions for hills are
-  fine; routine drift above LT1 is a problem.
-- **Purpose:** aerobic base, running economy, recovery — *not* a moderate
-  workout.
-
-See `coach://user_profile` for your specific easy-cap bpm.
-
-The signal isn't a strict number — it's that easy should feel easy the
-next morning too. If you're not fully recovered by the next day, the run
-was too hard regardless of HR.
-
-If a planned easy run climbs into mid-Z2 / Z3 territory without good
-reason (hills, heat, fatigue), it's drifting toward the gray zone —
-too hard to recover from, too easy to drive adaptation. The worst place
-to live.
+See `coach://user_profile` for your easy-cap bpm. The real signal isn't
+the number; it's whether you feel recovered the next morning.
 
 ---
 
@@ -430,83 +394,37 @@ a third hard session is too much sustained quality for most amateurs.
 Treat the X-økt as the variation lever — what you cycle through that
 keeps the framework from going stale across a 12-week block.
 
-### Advanced variant: double-threshold days (NOT current default — see warnings)
+### Advanced variant: double-threshold days (NOT current default)
 
-**⚠ This is advanced territory. The default plan is Norwegian Singles
-(one threshold session per quality day). Do not move to double-threshold
-without confirming with the user that they're ready.**
+**⚠ Gatekept. Default is Norwegian Singles. Don't recommend
+double-threshold without explicit user confirmation.**
 
-Bakken's full elite protocol clusters two sub-threshold sessions into the
-same day, typically Tuesday and Thursday, with 6-8 hours between:
+The elite protocol clusters two sub-threshold sessions into the same day
+(6-8 h apart): morning long reps (5×6 min, 4×8 min), evening short reps
+(10×1k or 45/15). Both in the Golden Zone — neither at-threshold. Muscle
+tone recovers enough between sessions that the second lands on fresh
+legs despite partial glycogen depletion, compounding weekly threshold
+volume well beyond singles.
 
-- **Morning:** longer reps (e.g. 5×6 min, 4×8 min, or 6×2k).
-- **Evening:** shorter reps (10×1k or 45/15) at same sub-threshold HR.
-- Both sessions in the Golden Zone — neither is at-threshold.
+Why gatekept: Bakken's reference athletes ran 150-220 km/week with 5+
+years of consistent volume. Below ~80 km/week the base isn't there;
+recovery infrastructure (sleep, nutrition, lifestyle fit) starts
+mattering much more than for singles.
 
-The trick is **muscle-tone recovery** between sessions: the few-hour
-break is enough for muscle tone to drop, letting the second session
-land on relatively fresh legs even though glycogen and recovery state
-are partially depleted. This compounds weekly threshold volume far
-beyond what's possible with one session per quality day.
+Preconditions before recommending:
+- Sustained 70+ km/week (ideally 100+).
+- ≥ 8-12 weeks of consistent sub-threshold singles.
+- Goal race ≥ 10k (less benefit for pure 5k focus).
+- User explicitly wants to try it.
 
-**Why this is gatekept:**
+If any fail, stay on Singles. Adopt gradually via Bakken's ramp (see
+*Løping!* ch. 7): start with easy+threshold on the same day before any
+true double, modulate the first true doubles 10-15 sec/km slower than
+normal sub-threshold pace.
 
-1. **Weekly volume.** Bakken's reference athletes ran 150-220 km/week.
-   Below ~80 km/week, double-threshold doesn't fit — the easy-volume
-   base isn't there to absorb the additional quality load.
-2. **Training history.** Elite-level use assumes 5+ years of consistent
-   high-volume aerobic training. Adopting it too early risks injury
-   without the structural durability to handle the load.
-3. **Recovery infrastructure.** Sleep, nutrition between sessions, and
-   strict easy-day discipline matter much more than for singles.
-4. **Lifestyle fit.** Two ~60 min sessions per day, twice a week, plus
-   normal easy mileage and one long run, is a part-time-job training load.
-
-**Before recommending it to the user, confirm:**
-- Weekly running volume is sustained at 70+ km (ideally 100+).
-- They've been consistent at sub-threshold singles for at least 8-12 weeks.
-- They explicitly want to try it and have time/energy for two sessions
-  per day on hard days.
-- Goal race is 10k or longer (less benefit for pure 5k focus).
-
-If those don't all hold, **stay on Norwegian Singles** and progress via
-the within-block variation principle instead. The Singles framework
-delivers most of the benefit at a fraction of the lifestyle cost — which
-is why the amateur adaptation exists.
-
-**Frequency cap once adopted:** even when criteria are met, do at most
-**2 double-threshold days per week** (typically Tue + Thu or Tue + Sat),
-with full easy days between. Bakken explicitly warns the format is
-"forførende" (seductive): when it works, every day feels good, and the
-temptation is to add a third double-day. Don't — the body needs the
-between-day downshift to keep the format repeatable across weeks.
-
-**If/when adopting, follow Bakken's 6-step gradual entry:**
-1. Two normal training sessions on the same day (one easy, one moderate)
-   for 4-6 weeks to establish two-a-day rhythm without quality stress.
-2. Easy run in the morning + threshold session in the evening for
-   another 4-6 weeks.
-3. First true double-threshold day, with modulated intensity 10-15
-   sec/km *slower* than your normal sub-threshold pace.
-4. Build to 15-20 min effective work per session (morning + evening).
-5. Evaluate every week: how does the body respond next day? Continue
-   only if recovery feels clean.
-6. Stabilize at the full prescription (2 double-days per week, full work
-   volume, periodized as below).
-
-**NTNU 2024 study validation:** a randomized comparison of long-single
-threshold (6×10 min) vs. double-threshold (2× 3×10 min) showed the
-single session drifts cardiovascularly through the session with lactate
-climbing ~40% by the end, while the double splits the same total work
-with stable HR and lactate. Same weekly stimulus, lower per-session
-stress, faster next-day recovery. This is the research underpinning
-the format Bakken developed empirically in the 1990s.
-
-**Periodization once running it:**
-- *Build phase (3-4 months):* 2 double-days per week, plenty of room.
-- *Race prep (2-3 months):* reduce to 1 double per week, add some race-
-  specific work alongside.
-- *Race week (1-2 weeks):* at most 1 double, well away from race day.
+**Frequency cap once adopted:** at most 2 double-days per week, with
+full easy days between. Bakken calls the format "forførende" — feeling
+good every day tempts a third double, which breaks the recovery loop.
 
 ---
 
@@ -554,33 +472,17 @@ the framework only works if you can repeat sessions.
 
 ## What this framework is NOT
 
-To prevent drift toward conventional advice:
-
-- **Not "polarized 80/20."** Polarized treats the 20% as hard intervals at
-  VO2max effort. This framework's "hard" portion is sub-threshold, not
+- **Not "polarized 80/20"** — the hard portion is sub-threshold, not
   VO2max. Closer to 70-30 with the 30% being controlled threshold.
-- **Not "more volume = better."** Bakken's elite block was 180 km/week
-  *because* of double-threshold loading. At amateur volume, adding easy
-  km doesn't substitute for threshold quality.
-- **Not "long runs as quality."** Pure aerobic base. No fast finishes.
-- **Not "marathon-style pyramid."** No huge volume blocks; the structure
-  is consistent week to week with periodic deloads.
-- **Not "harder is better."** Slightly under target HR is fine, often
-  better. Significantly over target HR is a problem.
+- **Not "more easy volume = better"** — at amateur volume, easy km don't
+  substitute for threshold quality.
+- **Not "long runs as quality"** — pure aerobic base, no fast finishes.
+- **Not "harder is better"** — slightly under target HR is often better;
+  over target is a problem.
 
 ---
 
 ## When this file gets out of date
 
-Edit this doc when:
-- The user's training methodology shifts (e.g., away from Bakken toward
-  something else).
-- New evidence from your own training challenges a tenet here (e.g., if
-  you find that one threshold per week with a true long run works better
-  than two thresholds with a flat-pace long run, update accordingly).
-- Race results suggest a different focus (e.g., shifting from 10k to
-  marathon-specific work).
-
-Do NOT edit it for one-off week-level adjustments — those go in
-`plan.json`. The philosophy doc is the framework; the plan is the
-execution.
+Edit when methodology itself shifts (e.g., away from Bakken). Do NOT
+edit for week-level adjustments — those go in `plan.json`.
