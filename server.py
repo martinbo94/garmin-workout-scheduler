@@ -1048,14 +1048,32 @@ def get_gear_for_activity(activity_id: int) -> dict:
 # ─── Drill-in / recovery / retrospective ──────────────────────────────
 @mcp.tool()
 def activity_breakdown(activity_id: int) -> dict:
-    """Detailed breakdown of a single cached activity.
+    """**First-line tool for analyzing a single completed activity.** Use
+    this before reaching for raw Strava streams — it returns the lap
+    structure, HR-zone distribution, and a heuristic session category in
+    one call, all anchored to the user's current HR zones from
+    coach://user_profile.
 
-    Returns name, description, distance, moving time, avg/max HR,
-    classification hint, and time in each HR zone (Z1-Z5) as both seconds
-    and percentages. Useful for drilling into a specific session ("how did
-    Tuesday's threshold go?") without pulling the full weekly summary.
+    Returns:
+    - Metadata: id, date, name, description, distance_m, moving_time_s,
+      avg_hr, max_hr, sport_type
+    - `laps`: list of {lap_index, type, distance_m, moving_time_s,
+      pace_s_per_km, avg_hr, max_hr}. `type` is auto-classified as
+      "drag" (work rep, Z3+ avg HR ≥30s), "pause" (recovery between
+      drags), "wu" (warmup before first drag), "cd" (cooldown after
+      last drag), or "easy" (continuous easy run, no drags found).
+    - `zone_secs` + `zone_pcts`: time in each HR zone (Z1-Z5).
+    - `session_category`: heuristic "easy" | "sub-threshold" |
+      "at-threshold" | "vo2" — useful for compliance scoring against
+      the plan. Refine ambiguous edges via coach://classification.
+    - `classification_hint`: name-pattern hint (deterministic 90% case).
 
-    If the activity isn't in the cache, run `sync_activities` first.
+    The activity must be in the local Strava cache. If `error` is
+    returned with `next_steps`, call `sync_activities()` (or
+    `sync_activities(weeks_back=N)` for older activities) and retry.
+    Laps are fetched lazily from Strava on first call and cached.
+
+    Strava ID, not Garmin ID.
     """
     return strava_sync.activity_breakdown(activity_id)
 
@@ -1100,22 +1118,94 @@ def get_wellness_history(
     return data
 
 
+def _extract_training_summary(readiness, status) -> dict:
+    """Flatten the key fields out of Garmin's verbose readiness + status payloads.
+
+    Returns a single-level dict of the things a coach actually checks:
+    readiness score/level/feedback, recovery time, ACWR, acute load,
+    training status verbal label (PRODUCTIVE / MAINTAINING / etc.) and
+    current VO2max estimate. Missing fields are silently None; the raw
+    payloads are still returned alongside for anything not extracted.
+    """
+    out: dict = {}
+
+    r = readiness[0] if isinstance(readiness, list) and readiness else (
+        readiness if isinstance(readiness, dict) else {}
+    )
+    if r and "error" not in r:
+        out["readiness_score"] = r.get("score")
+        out["readiness_level"] = r.get("level")
+        out["readiness_feedback"] = r.get("feedbackLong") or r.get("feedbackShort")
+        out["recovery_time_hours"] = r.get("recoveryTime")
+        out["acute_load"] = r.get("acuteLoad")
+        # Garmin doesn't expose a raw ACWR number — only the factor (0-100)
+        # and a verbal feedback like "VERY_GOOD" / "POOR".
+        out["acwr_factor_percent"] = r.get("acwrFactorPercent")
+        out["acwr_factor_feedback"] = r.get("acwrFactorFeedback")
+        out["hrv_factor_percent"] = r.get("hrvFactorPercent")
+        out["hrv_factor_feedback"] = r.get("hrvFactorFeedback")
+        out["sleep_score_factor_percent"] = r.get("sleepScoreFactorPercent")
+        out["sleep_score_factor_feedback"] = r.get("sleepScoreFactorFeedback")
+        out["sleep_history_factor_percent"] = r.get("sleepHistoryFactorPercent")
+        out["sleep_history_factor_feedback"] = r.get("sleepHistoryFactorFeedback")
+        out["stress_history_factor_percent"] = r.get("stressHistoryFactorPercent")
+        out["stress_history_factor_feedback"] = r.get("stressHistoryFactorFeedback")
+        out["recovery_time_factor_percent"] = r.get("recoveryTimeFactorPercent")
+        out["recovery_time_factor_feedback"] = r.get("recoveryTimeFactorFeedback")
+
+    if isinstance(status, dict) and "error" not in status:
+        # VO2max lives under mostRecentVO2Max, not the training status block.
+        vo2 = (status.get("mostRecentVO2Max") or {}).get("generic") or {}
+        out["vo2max"] = vo2.get("vo2MaxValue")
+        out["vo2max_precise"] = vo2.get("vo2MaxPreciseValue")
+        out["fitness_age"] = vo2.get("fitnessAge")
+
+        ts = status.get("mostRecentTrainingStatus") or {}
+        latest = ts.get("latestTrainingStatusData") or {}
+        # latestTrainingStatusData is keyed by deviceId — grab the first device.
+        device_data = next(iter(latest.values()), {}) if isinstance(latest, dict) else {}
+        if device_data:
+            out["training_status_code"] = device_data.get("trainingStatus")
+            out["training_status"] = device_data.get("trainingStatusFeedbackPhrase")
+            out["weekly_training_load"] = device_data.get("weeklyTrainingLoad")
+            out["load_tunnel_min"] = device_data.get("loadTunnelMin")
+            out["load_tunnel_max"] = device_data.get("loadTunnelMax")
+            out["fitness_trend"] = device_data.get("fitnessTrend")
+            out["load_level_trend"] = device_data.get("loadLevelTrend")
+
+    return out
+
+
 @mcp.tool()
 def morning_check_in() -> dict:
-    """Today's recovery / readiness metrics from Garmin.
+    """Today's recovery snapshot — flattened metrics, 7-day trend deltas,
+    and Garmin's readiness/status assessments. All in one call.
 
-    Pulls training readiness, sleep (last night), HRV, body battery,
-    training status, and resting HR. Each endpoint is fetched
-    independently — partial results are returned with per-field errors if
-    individual calls fail.
+    Returns:
+    - `wellness.today`: flat HRV (overnight, weekly avg, baseline band,
+      status), RHR, sleep (duration, score, deep/REM/light/awake),
+      stress, body battery (high/low/at-wake), respiration, SpO2.
+    - `wellness.trends`: prior 7-day mean + delta + stdev + deviation
+      flag for each metric. Flag fires when today is >1σ outside the
+      trailing mean in the "bad" direction (HRV ↓, RHR ↑, sleep ↓,
+      stress ↑).
+    - `training_summary`: flat readiness score/level/feedback, ACWR,
+      acute load, recovery time, training status verbal (PRODUCTIVE /
+      MAINTAINING / etc.), VO2max, weekly load.
+    - `training_readiness_raw`, `training_status_raw`, `body_battery`:
+      the full Garmin payloads for anything not flattened above.
 
     Use to decide whether to do a planned quality session today or shift
-    it (e.g., low training readiness → defer threshold to tomorrow).
+    it (e.g., HRV deviation_low + elevated RHR + low readiness → defer
+    threshold). For multi-day trends beyond 7 days, use
+    `get_wellness_history`.
     """
-    from datetime import date as _date, timedelta as _td
+    from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
     g = _client()
-    today = _date.today().isoformat()
-    yesterday = (_date.today() - _td(days=1)).isoformat()
+    today = _date.today()
+    yesterday = today - _td(days=1)
+    history_start = (today - _td(days=8)).isoformat()
+    history_end = yesterday.isoformat()
 
     def safe(fn, *args):
         try:
@@ -1123,15 +1213,25 @@ def morning_check_in() -> dict:
         except Exception as e:
             return {"error": f"{type(e).__name__}: {e}"}
 
+    wellness = strava_sync.morning_check_in_data(
+        g, today.isoformat(), yesterday.isoformat(), history_start, history_end,
+    )
+
+    training_readiness_raw = safe(g.get_training_readiness, today.isoformat())
+    training_status_raw = safe(g.get_training_status, today.isoformat())
+    body_battery = safe(g.get_body_battery, today.isoformat())
+    training_summary = _extract_training_summary(
+        training_readiness_raw, training_status_raw
+    )
+
     return {
-        "date": today,
-        "training_readiness": safe(g.get_training_readiness, today),
-        "morning_readiness": safe(g.get_morning_training_readiness, today),
-        "training_status": safe(g.get_training_status, today),
-        "sleep_last_night": safe(g.get_sleep_data, yesterday),
-        "hrv": safe(g.get_hrv_data, today),
-        "body_battery": safe(g.get_body_battery, today),
-        "resting_hr": safe(g.get_rhr_day, today),
+        "date": today.isoformat(),
+        "captured_at": _dt.now(_tz.utc).isoformat(),
+        "wellness": wellness,
+        "training_summary": training_summary,
+        "training_readiness_raw": training_readiness_raw,
+        "training_status_raw": training_status_raw,
+        "body_battery": body_battery,
     }
 
 

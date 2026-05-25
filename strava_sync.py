@@ -95,6 +95,13 @@ CREATE TABLE IF NOT EXISTS streams (
     FOREIGN KEY (activity_id) REFERENCES activities(id)
 );
 
+CREATE TABLE IF NOT EXISTS laps (
+    activity_id INTEGER PRIMARY KEY,
+    laps_json TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    FOREIGN KEY (activity_id) REFERENCES activities(id)
+);
+
 CREATE TABLE IF NOT EXISTS sync_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -109,19 +116,41 @@ CREATE TABLE IF NOT EXISTS wellness_daily (
     hrv_baseline_low INTEGER,
     hrv_baseline_upper INTEGER,
     sleep_seconds INTEGER,
+    sleep_score INTEGER,
+    sleep_deep_s INTEGER,
+    sleep_rem_s INTEGER,
+    sleep_light_s INTEGER,
+    sleep_awake_s INTEGER,
     avg_stress INTEGER,
     body_battery_high INTEGER,
     body_battery_low INTEGER,
     body_battery_at_wake INTEGER,
+    respiration_avg INTEGER,
+    spo2_avg INTEGER,
     synced_at TEXT NOT NULL
 );
 """
+
+# Columns added after initial schema — applied via ALTER TABLE on existing DBs.
+_WELLNESS_MIGRATION_COLUMNS = {
+    "sleep_score": "INTEGER",
+    "sleep_deep_s": "INTEGER",
+    "sleep_rem_s": "INTEGER",
+    "sleep_light_s": "INTEGER",
+    "sleep_awake_s": "INTEGER",
+    "respiration_avg": "INTEGER",
+    "spo2_avg": "INTEGER",
+}
 
 
 def _init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
         conn.executescript(SCHEMA)
+        existing = {r[1] for r in conn.execute("PRAGMA table_info(wellness_daily)")}
+        for col, col_type in _WELLNESS_MIGRATION_COLUMNS.items():
+            if col not in existing:
+                conn.execute(f"ALTER TABLE wellness_daily ADD COLUMN {col} {col_type}")
 
 
 def _get_last_sync() -> Optional[datetime]:
@@ -180,6 +209,36 @@ def _list_activities_since(after: datetime) -> list[dict]:
 
 def _get_activity_detail(activity_id: int) -> dict:
     return _strava_get(f"/activities/{activity_id}")
+
+
+def _get_activity_laps(activity_id: int) -> list[dict]:
+    """Fetch lap segments from Strava. Empty list if the activity has no laps."""
+    try:
+        data = _strava_get(f"/activities/{activity_id}/laps")
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return []
+        raise
+    return data if isinstance(data, list) else []
+
+
+def _cached_laps(activity_id: int) -> Optional[list[dict]]:
+    """Read laps from cache. None if never fetched, [] if fetched-but-no-laps."""
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT laps_json FROM laps WHERE activity_id = ?", (activity_id,)
+        ).fetchone()
+    if row is None:
+        return None
+    return json.loads(row[0])
+
+
+def _store_laps(activity_id: int, laps: list[dict]) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO laps (activity_id, laps_json, fetched_at) VALUES (?, ?, ?)",
+            (activity_id, json.dumps(laps), datetime.now(timezone.utc).isoformat()),
+        )
 
 
 def _get_activity_streams(activity_id: int) -> Optional[dict]:
@@ -456,8 +515,12 @@ import math as _math
 
 
 def _fetch_wellness_day(garmin_client, date_str: str) -> dict:
-    """Pull HRV + daily-stats wellness metrics for one date. Tolerates missing
-    fields — Garmin returns nulls for days without watch wear / sync."""
+    """Pull HRV + daily-stats + sleep wellness metrics for one date.
+
+    Tolerates missing fields — Garmin returns nulls for days without
+    watch wear / sync, and individual endpoints may be unavailable
+    depending on device model.
+    """
     out: dict = {"date": date_str}
 
     try:
@@ -482,6 +545,33 @@ def _fetch_wellness_day(garmin_client, date_str: str) -> dict:
             out["body_battery_high"] = s.get("bodyBatteryHighestValue")
             out["body_battery_low"] = s.get("bodyBatteryLowestValue")
             out["body_battery_at_wake"] = s.get("bodyBatteryAtWakeTime")
+            # Respiration + SpO2 are device-dependent — graceful None if absent.
+            out["respiration_avg"] = (
+                s.get("avgWakingRespirationValue")
+                or s.get("averageRespirationValue")
+            )
+            out["spo2_avg"] = (
+                s.get("averageSpo2")
+                or s.get("averageSpO2HR")
+                or s.get("avgSleepSpO2")
+            )
+    except Exception:
+        pass
+
+    # Sleep score + stage breakdown live under get_sleep_data, not get_stats.
+    # Sleep data is keyed to the date the sleep STARTED, i.e. typically the
+    # date BEFORE the caller's "today" — caller decides which date to pass.
+    try:
+        sd = garmin_client.get_sleep_data(date_str)
+        if sd and isinstance(sd, dict):
+            dto = sd.get("dailySleepDTO") or {}
+            scores = dto.get("sleepScores") or {}
+            overall = scores.get("overall") or {}
+            out["sleep_score"] = overall.get("value")
+            out["sleep_deep_s"] = dto.get("deepSleepSeconds")
+            out["sleep_rem_s"] = dto.get("remSleepSeconds")
+            out["sleep_light_s"] = dto.get("lightSleepSeconds")
+            out["sleep_awake_s"] = dto.get("awakeSleepSeconds")
     except Exception:
         pass
 
@@ -501,8 +591,11 @@ def _save_wellness_day(row: dict) -> None:
     cols = [
         "date", "resting_hr", "hrv_overnight_avg", "hrv_weekly_avg",
         "hrv_status", "hrv_baseline_low", "hrv_baseline_upper",
-        "sleep_seconds", "avg_stress",
+        "sleep_seconds", "sleep_score",
+        "sleep_deep_s", "sleep_rem_s", "sleep_light_s", "sleep_awake_s",
+        "avg_stress",
         "body_battery_high", "body_battery_low", "body_battery_at_wake",
+        "respiration_avg", "spo2_avg",
         "synced_at",
     ]
     vals = [row.get(c) for c in cols[:-1]] + [datetime.now(timezone.utc).isoformat()]
@@ -547,6 +640,92 @@ def sync_wellness_range(
                 errors.append(f"{ds}: {type(e).__name__}: {e}")
         d += timedelta(days=1)
     return {"cached": cached, "fetched": fetched, "errors": errors}
+
+
+def _compute_morning_trends(today_metrics: dict, history: list[dict]) -> dict:
+    """Compare today's wellness metrics against the prior-7-day window.
+
+    For each tracked metric: 7-day mean, today's value, delta, stdev,
+    and a deviation flag when today's reading is >1 stdev outside the
+    trailing mean in the "bad" direction (HRV ↓, RHR ↑, sleep ↓,
+    stress ↑). Direction-good encoded per metric so the flag is
+    semantically meaningful.
+    """
+    def mean(vals):
+        return round(sum(vals) / len(vals), 1) if vals else None
+
+    def stdev(vals, m):
+        if not vals or len(vals) < 2 or m is None:
+            return None
+        var = sum((v - m) ** 2 for v in vals) / (len(vals) - 1)
+        return _math.sqrt(var)
+
+    def trend(field: str, higher_is_better: bool) -> Optional[dict]:
+        hist_vals = [d[field] for d in history if d.get(field) is not None]
+        today_v = today_metrics.get(field)
+        m = mean(hist_vals)
+        s = stdev(hist_vals, m)
+        if m is None and today_v is None:
+            return None
+        delta = round(today_v - m, 1) if (today_v is not None and m is not None) else None
+        flag = None
+        if delta is not None and s is not None and abs(delta) > s:
+            bad_direction = "below" if higher_is_better else "above"
+            flag = f"{bad_direction}_normal" if (
+                (delta < 0 and higher_is_better) or (delta > 0 and not higher_is_better)
+            ) else "outside_normal_favorable"
+        return {
+            "today": today_v,
+            "mean_7d": m,
+            "delta_vs_7d": delta,
+            "stdev_7d": round(s, 1) if s is not None else None,
+            "samples_7d": len(hist_vals),
+            "flag": flag,
+        }
+
+    return {
+        "hrv_overnight_avg": trend("hrv_overnight_avg", higher_is_better=True),
+        "resting_hr": trend("resting_hr", higher_is_better=False),
+        "sleep_seconds": trend("sleep_seconds", higher_is_better=True),
+        "sleep_score": trend("sleep_score", higher_is_better=True),
+        "avg_stress": trend("avg_stress", higher_is_better=False),
+        "respiration_avg": trend("respiration_avg", higher_is_better=False),
+        "spo2_avg": trend("spo2_avg", higher_is_better=True),
+    }
+
+
+def morning_check_in_data(
+    garmin_client,
+    today_str: str,
+    yesterday_str: str,
+    history_start: str,
+    history_end: str,
+) -> dict:
+    """Build today's wellness snapshot + 7-day trend block.
+
+    Pulled fresh from Garmin for today (so the snapshot reflects current
+    sync state, not stale cache), backed by the cached wellness_daily
+    history for the prior week.
+    """
+    today = _fetch_wellness_day(garmin_client, today_str)
+    # Sleep data is keyed to the date the sleep STARTED — for "last night",
+    # that's yesterday. Re-fetch and overwrite sleep_* from yesterday.
+    sleep_last_night = _fetch_wellness_day(garmin_client, yesterday_str)
+    for k in (
+        "sleep_seconds", "sleep_score",
+        "sleep_deep_s", "sleep_rem_s", "sleep_light_s", "sleep_awake_s",
+    ):
+        if sleep_last_night.get(k) is not None:
+            today[k] = sleep_last_night[k]
+
+    # Make sure the 7-day window is in the cache before we trend on it.
+    sync_wellness_range(garmin_client, history_start, history_end)
+    history = _read_wellness_range(history_start, history_end)
+    return {
+        "today": today,
+        "trends": _compute_morning_trends(today, history),
+        "history_window": {"start": history_start, "end": history_end, "days": len(history)},
+    }
 
 
 def _read_wellness_range(start_date: str, end_date: str) -> list[dict]:
@@ -629,8 +808,129 @@ def wellness_history(start_date: str, end_date: str) -> dict:
     }
 
 
+def _zone_index(hr: Optional[float], zones: list[tuple[int, int, str]]) -> Optional[int]:
+    """Return 0-based zone index (0=Z1...4=Z5) for an HR value, or None."""
+    if hr is None:
+        return None
+    for i, (low, high, _) in enumerate(zones):
+        if low <= hr <= high:
+            return i
+    return None
+
+
+def _classify_laps(
+    laps: list[dict], zones: list[tuple[int, int, str]]
+) -> list[dict]:
+    """Tag each lap with type: drag, pause, wu, cd, or easy.
+
+    Heuristic (two-pass):
+    - Primary: a lap is a "drag" if avg_hr is in Z3+ AND moving_time >= 30s.
+    - HR-lag rescue: if a lap has max_hr in Z3+ AND its pace is within
+      30 sec/km of the median pace of primary drags, it's reclassified
+      as a drag. This catches the common case where the first rep's avg
+      HR sits just below Z3 because HR hadn't caught up yet — pace + max
+      both confirm it was actually a working rep.
+    - If no drags exist → all laps are "easy" (continuous easy run).
+    - Otherwise: laps before first drag = "wu", after last drag = "cd",
+      between drags = "pause".
+    """
+    if not laps:
+        return []
+
+    is_drag: list[bool] = []
+    for lap in laps:
+        zi = _zone_index(lap.get("average_heartrate"), zones)
+        moving = lap.get("moving_time") or 0
+        is_drag.append(zi is not None and zi >= 2 and moving >= 30)
+
+    drag_paces = [
+        1000.0 / lap["average_speed"]
+        for lap, d in zip(laps, is_drag)
+        if d and (lap.get("average_speed") or 0) > 0
+    ]
+    if drag_paces:
+        sorted_paces = sorted(drag_paces)
+        median_pace = sorted_paces[len(sorted_paces) // 2]
+        for i, lap in enumerate(laps):
+            if is_drag[i]:
+                continue
+            mx_zi = _zone_index(lap.get("max_heartrate"), zones)
+            speed = lap.get("average_speed") or 0
+            moving = lap.get("moving_time") or 0
+            if moving < 30 or speed <= 0 or mx_zi is None or mx_zi < 2:
+                continue
+            if abs(1000.0 / speed - median_pace) <= 30:
+                is_drag[i] = True
+
+    out: list[dict] = []
+    if not any(is_drag):
+        for lap in laps:
+            out.append({**lap, "lap_type": "easy"})
+        return out
+
+    first = is_drag.index(True)
+    last = len(is_drag) - 1 - list(reversed(is_drag)).index(True)
+    for i, lap in enumerate(laps):
+        if is_drag[i]:
+            t = "drag"
+        elif i < first:
+            t = "wu"
+        elif i > last:
+            t = "cd"
+        else:
+            t = "pause"
+        out.append({**lap, "lap_type": t})
+    return out
+
+
+def _summarize_laps(laps: list[dict]) -> list[dict]:
+    """Compact lap summary for the report (only fields a coach needs)."""
+    summary = []
+    for lap in laps:
+        moving = lap.get("moving_time") or 0
+        dist = lap.get("distance") or 0
+        avg_speed = lap.get("average_speed") or 0
+        pace_s_per_km = round(1000 / avg_speed, 1) if avg_speed > 0 else None
+        summary.append({
+            "lap_index": lap.get("lap_index"),
+            "type": lap.get("lap_type"),
+            "distance_m": round(dist),
+            "moving_time_s": moving,
+            "pace_s_per_km": pace_s_per_km,
+            "avg_hr": lap.get("average_heartrate"),
+            "max_hr": lap.get("max_heartrate"),
+        })
+    return summary
+
+
+def _session_category(zone_pcts: dict) -> str:
+    """Heuristic session classification from zone distribution.
+
+    Anchored to the Bakken framework (Z3 = sub-threshold Golden Zone,
+    Z4 = at-threshold, Z5 = VO2). Returns 'easy' | 'sub-threshold' |
+    'at-threshold' | 'vo2'. Claude should refine ambiguous edges using
+    coach://classification.
+    """
+    z3 = zone_pcts.get("Z3", 0)
+    z4 = zone_pcts.get("Z4", 0)
+    z5 = zone_pcts.get("Z5", 0)
+    if z5 >= 5:
+        return "vo2"
+    if z4 >= 20:
+        return "at-threshold"
+    if z3 >= 10:
+        return "sub-threshold"
+    return "easy"
+
+
 def activity_breakdown(activity_id: int) -> dict:
-    """Single activity with zone time breakdown computed from cached streams."""
+    """Lap-level breakdown + zone distribution for one cached activity.
+
+    Returns metadata, per-lap classification (drag/pause/wu/cd/easy),
+    HR-zone time/percent, and a heuristic session_category.
+
+    Laps are fetched from Strava on first call and cached locally.
+    """
     _init_db()
     zones = _parse_zones()
 
@@ -647,7 +947,14 @@ def activity_breakdown(activity_id: int) -> dict:
         ).fetchone()
 
     if not row:
-        return {"error": f"Activity {activity_id} not in cache. Try sync_activities first."}
+        return {
+            "error": f"Activity {activity_id} not in local cache.",
+            "next_steps": [
+                "Run sync_activities() to pull recent activities.",
+                "If the activity is older than 12 weeks, call "
+                "sync_activities(weeks_back=N) with N covering the activity date.",
+            ],
+        }
 
     zone_secs = {z[2]: 0 for z in zones}
     below_z1 = 0
@@ -669,6 +976,23 @@ def activity_breakdown(activity_id: int) -> dict:
     total = sum(zone_secs.values()) + below_z1
     zone_pcts = {z: round(100 * s / total, 1) if total else 0 for z, s in zone_secs.items()}
 
+    laps_raw = _cached_laps(activity_id)
+    if laps_raw is None:
+        try:
+            laps_raw = _get_activity_laps(activity_id)
+            _store_laps(activity_id, laps_raw)
+        except Exception as e:
+            laps_raw = []
+            lap_fetch_error = f"{type(e).__name__}: {e}"
+        else:
+            lap_fetch_error = None
+    else:
+        lap_fetch_error = None
+
+    classified = _classify_laps(laps_raw, zones)
+    lap_summary = _summarize_laps(classified)
+    session_category = _session_category(zone_pcts)
+
     return {
         "id": row["id"],
         "date": row["start_date_local"][:10],
@@ -681,8 +1005,12 @@ def activity_breakdown(activity_id: int) -> dict:
         "avg_hr": row["avg_hr"],
         "max_hr": row["max_hr"],
         "classification_hint": name_hint(row["name"], row["sport_type"]),
+        "session_category": session_category,
         "zone_secs": zone_secs,
         "zone_pcts": zone_pcts,
         "below_z1_secs": below_z1,
+        "laps": lap_summary,
+        "lap_count": len(lap_summary),
         "has_stream_data": row["time_json"] is not None,
+        "lap_fetch_error": lap_fetch_error,
     }
