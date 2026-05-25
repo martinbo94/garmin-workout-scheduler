@@ -21,7 +21,76 @@ load_dotenv(Path(__file__).parent / ".env")
 import strava_sync  # noqa: E402  (must load after dotenv so token refresh works)
 import plan as plan_mod  # noqa: E402
 
-mcp = FastMCP("garmin-coach")
+SERVER_INSTRUCTIONS = """
+This server is the user's personal running coach setup. It hosts:
+- `coach://` resources: training_philosophy (Bakken Norwegian threshold
+  framework), user_profile (lab-calibrated zones, paces, race PRs,
+  athlete profile A/B/C), plan_design, classification.
+- Tools for Garmin activity/wellness data, Strava sync, plan management.
+
+ROUTING RULES — read before any analytical task:
+
+1. HR ZONES, PACES, ATHLETE PROFILE come from `get_athlete_profile`
+   (or `coach://user_profile`). NEVER use Strava's athlete zones — they
+   reflect Strava settings, not the user's lab-calibrated thresholds.
+   Strava's max HR is typically a recent race HR, not the user's true
+   max, so its zones are systematically shifted 5-10 bpm low.
+
+2. ACTIVITY ANALYSIS: prefer `activity_breakdown(strava_id)` over raw
+   Strava streams. It returns lap classification (drag/pause/wu/cd),
+   zone time, and session category in one call, anchored to the user's
+   actual zones.
+
+3. RECOVERY / READINESS: `morning_check_in` returns flat HRV, RHR, sleep
+   score + stages, Garmin training_status (PEAKING / PRODUCTIVE / etc.),
+   training_summary, and 7-day trend deltas with deviation flags. Pull
+   this BEFORE setting race goals or deciding whether to push a quality
+   session.
+
+4. WEEKLY VOLUME / ZONE TIME: `weekly_summary` (this server, anchored to
+   user_profile zones), not Strava's raw activity list.
+
+5. STRAVA is SECONDARY — useful for segments, GPS detail, social, or
+   activities outside the local cache window.
+
+PRE-ANALYSIS PROTOCOL (race goal, weekly review, plan tweak):
+  a. `get_athlete_profile` — lock in zones, paces, PRs, profile A/B/C.
+  b. `morning_check_in` — current readiness.
+  c. `weekly_summary` for the relevant window — volume + zone trend.
+  d. `activity_breakdown` for the specific reference sessions.
+  e. THEN reason — not before.
+
+INTERPRETATION RULES (apply when reasoning over activity data):
+
+- For interval/quality sessions, ALWAYS use the drag laps' `avg_hr` from
+  `activity_breakdown.laps`, NEVER the session-wide `avg_hr`. The
+  session average is diluted by warmup, cooldown, and recovery jogs, so
+  it systematically understates working HR. A 3×6 min sub-threshold
+  session can show session avg 165 bpm while the reps themselves were
+  at 184. Conclude "not a threshold session" from session avg = a
+  classic error.
+- When a rep's `avg_hr` lands on a zone boundary, check its `max_hr`
+  too. HR-lag often produces low-Z2 avg with mid-Z3+ max on the first
+  rep — that's still a working rep (the `activity_breakdown`
+  classifier already rescues these into `drag` via the pace co-signal).
+- The `session_category` field is heuristic from aggregate zones; it
+  can read "easy" for sessions whose reps WERE threshold-level if the
+  rep fraction was small. Always inspect `laps` for sessions with
+  interval-style names (Intervaller, Tempo, etc.).
+
+ATHLETE PROFILE matters for race-goal estimation:
+- Profile A (VO2-strong, utilization-weak): Riegel/VDOT tend to
+  OVERESTIMATE. Hitting-the-wall history common — bias goals slightly
+  conservative.
+- Profile B (utilization-strong, VO2-weak): Riegel tends to underestimate.
+- Profile C (balanced): Riegel/VDOT as-is.
+
+If a value seems off (HR zone, max HR, race PR), VERIFY via
+`get_athlete_profile` before reasoning further. Never carry forward a
+Strava-derived zone into a coaching recommendation.
+""".strip()
+
+mcp = FastMCP("garmin-coach", instructions=SERVER_INSTRUCTIONS)
 _COACH_DATA = Path(__file__).parent / "coach_data"
 
 
@@ -36,7 +105,6 @@ def classification_rules() -> str:
 
 
 _USER_PROFILE_PATH = _COACH_DATA / "user_profile.md"
-_USER_PROFILE_EXAMPLE_PATH = _COACH_DATA / "examples" / "user_profile.example.md"
 
 
 # ─── Resource-equivalent tools (for clients that don't auto-load resources)
@@ -196,6 +264,189 @@ def user_profile_status() -> dict:
     else:
         result["next_step"] = "Profile looks filled in — no setup action needed."
     return result
+
+
+def _split_markdown_sections(text: str) -> dict[str, str]:
+    """Split a markdown doc by H2 headings into a {heading: body} dict."""
+    out: dict[str, str] = {}
+    current_heading: Optional[str] = None
+    buf: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if current_heading is not None:
+                out[current_heading] = "\n".join(buf)
+            current_heading = line[3:].strip()
+            buf = []
+        else:
+            buf.append(line)
+    if current_heading is not None:
+        out[current_heading] = "\n".join(buf)
+    return out
+
+
+def _parse_athlete_profile() -> dict:
+    """Parse coach_data/user_profile.md into a structured dict.
+
+    Section-scoped: race PRs only parsed from the Race PRs section, pace
+    estimates only from the Session pace estimates section, etc. Tolerant
+    of missing fields — returns None for anything it can't extract, plus
+    the raw markdown so the agent can fall back when needed.
+    """
+    import re as _re
+    if not _USER_PROFILE_PATH.exists():
+        return {
+            "exists": False,
+            "path": str(_USER_PROFILE_PATH),
+            "next_step": "Run init_user_profile() to create the profile.",
+        }
+
+    text = _USER_PROFILE_PATH.read_text(encoding="utf-8")
+    sections = _split_markdown_sections(text)
+
+    def grep_section(section_key_substr: str, pattern: str, group: int = 1, cast=str):
+        for key, body in sections.items():
+            if section_key_substr.lower() in key.lower():
+                m = _re.search(pattern, body, _re.IGNORECASE)
+                if m:
+                    try:
+                        return cast(m.group(group))
+                    except (ValueError, TypeError):
+                        return None
+        return None
+
+    max_hr = grep_section("Max HR", r"\*\*(\d+)\s*bpm\*\*", cast=int)
+
+    vo2_section = next((b for k, b in sections.items() if "VO2max" in k), "")
+    vo2max = _re.search(r"VO2max\s*\|\s*\*?\*?(\d+(?:\.\d+)?)\s*ml/min/kg", vo2_section)
+    weight = _re.search(r"Weight\s*\|\s*(\d+(?:\.\d+)?)\s*kg", vo2_section)
+    lt2 = _re.search(r"\*\*LT2 HR\*\*[^|]*\|\s*\*?\*?(\d+)\s*bpm", vo2_section)
+    lt1 = _re.search(r"\*\*LT1 HR\*\*[^|]*\|\s*\*?\*?(\d+)\s*bpm", vo2_section)
+    util = _re.search(r"Utilization at LT2\s*\|\s*\*?\*?(\d+)%", vo2_section)
+
+    # Sub-threshold training target band, e.g. "training target: 178-188".
+    st = _re.search(
+        r"sub-threshold[^|]*\|.*?training target:\s*(\d+)\s*-\s*(\d+)",
+        vo2_section, _re.IGNORECASE,
+    )
+    if not st:
+        st = _re.search(
+            r"sub-threshold[^|]*\|\s*~?(\d+)\s*-\s*(\d+)\s*bpm",
+            vo2_section, _re.IGNORECASE,
+        )
+    sub_threshold_band = (
+        {"low": int(st.group(1)), "high": int(st.group(2))} if st else None
+    )
+
+    # Athlete profile A/B/C — looks like "**Profile A: ...**"
+    profile_section = next((b for k, b in sections.items() if "Athlete profile" in k), "")
+    profile_match = _re.search(r"\*\*Profile\s+([A-C])\s*:\s*([^*]+?)\*\*", profile_section)
+    athlete_profile = (
+        {
+            "label": profile_match.group(1),
+            "description": profile_match.group(2).strip().rstrip(",").strip(),
+        }
+        if profile_match
+        else None
+    )
+
+    # HR zones — reuse the existing parser (reads the whole doc; zones table
+    # is the only place its pattern matches).
+    zones = []
+    try:
+        for low, high, name in strava_sync._parse_zones():
+            zones.append({"name": name, "low": low, "high": None if high >= 9999 else high})
+    except Exception:
+        pass
+
+    # Race PRs — parse the Race PRs section, table rows only.
+    race_prs = []
+    race_section = next((b for k, b in sections.items() if "Race PRs" in k), "")
+    for line in race_section.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [c.replace("**", "").strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 3:
+            continue
+        dist, time_s, pace_s = cells[0], cells[1], cells[2]
+        if not _re.match(r"^\d+\s*(?:k|km|HM|hm|Marathon|marathon)$", dist):
+            continue
+        if not _re.match(r"^\d+:\d+(?::\d+)?$", time_s):
+            continue
+        if not _re.match(r"^\d+:\d+/km$", pace_s):
+            continue
+        date_field = cells[3] if len(cells) > 3 else ""
+        race_prs.append({
+            "distance": dist,
+            "time": time_s,
+            "pace": pace_s,
+            "date": date_field if date_field and date_field not in ("—", "-", "older", "") else None,
+        })
+
+    # Pace estimates — parse the Session pace estimates section.
+    pace_estimates = {}
+    pace_section = next(
+        (b for k, b in sections.items() if "pace estimate" in k.lower()), ""
+    )
+    for line in pace_section.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [c.replace("**", "").strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        effort, pace = cells[0], cells[1]
+        if not _re.search(r"\d+:\d+", pace) or "km" not in pace.lower():
+            continue
+        if effort.lower() in {"effort", "outdoor pace"} or effort.startswith("-"):
+            continue
+        pace_estimates[effort] = pace
+
+    def _f(m, idx=1, cast=float):
+        if not m:
+            return None
+        try:
+            return cast(m.group(idx))
+        except (ValueError, TypeError):
+            return None
+
+    return {
+        "exists": True,
+        "max_hr_bpm": max_hr,
+        "lt1_hr": _f(lt1, cast=int),
+        "lt2_hr": _f(lt2, cast=int),
+        "sub_threshold_band_bpm": sub_threshold_band,
+        "vo2max_ml_min_kg": _f(vo2max),
+        "weight_kg": _f(weight),
+        "utilization_at_lt2_pct": _f(util, cast=int),
+        "zones": zones,
+        "athlete_profile": athlete_profile,
+        "race_prs": race_prs,
+        "pace_estimates": pace_estimates,
+    }
+
+
+@mcp.tool()
+def get_athlete_profile() -> dict:
+    """**Authoritative source for HR zones, paces, athlete profile, and race
+    PRs.** Use this before any analytical task — race goal estimation,
+    weekly review, session interpretation, plan drafting.
+
+    Returns a structured dict parsed from `coach://user_profile`:
+    - `max_hr_bpm`, `lt1_hr`, `lt2_hr` (lab-calibrated thresholds)
+    - `zones`: [{name, low, high}] for Z1-Z5 (verbatim from Garmin Connect)
+    - `sub_threshold_band_bpm`: Bakken Golden Zone training target
+    - `vo2max_ml_min_kg`, `weight_kg`, `utilization_at_lt2_pct`
+    - `athlete_profile`: {label: A/B/C, description} — drives race-goal
+      bias (Profile A: bias conservative; Profile B: Riegel underestimates;
+      Profile C: as-is)
+    - `race_prs`: list of {distance, time, pace, date}
+    - `pace_estimates`: {effort_name: pace_string} (easy, sub-threshold, etc.)
+
+    NEVER substitute Strava's athlete zones for these values. Strava's max
+    HR is typically a recent race HR (not the user's true max), so its
+    zone boundaries are systematically 5-10 bpm low. Always anchor zone
+    reasoning to this tool's output.
+    """
+    return _parse_athlete_profile()
 
 
 @mcp.tool()
@@ -753,9 +1004,10 @@ def weekly_summary(start_date: str, end_date: str) -> dict:
     Returns `{"weeks": [...], "coverage": {...}}`. Each week entry covers
     one Monday-Sunday week and contains total distance, run count, time
     in each HR zone (computed from raw streams using current bpm
-    boundaries from coach://user_profile), and the list of activities
-    with names, descriptions, distance, HR, and a `classification_hint`
-    derived from naming patterns.
+    boundaries from `get_athlete_profile` / coach://user_profile — NOT
+    Strava's athlete zones), and the list of activities with names,
+    descriptions, distance, HR, and a `classification_hint` derived
+    from naming patterns.
 
     The `coverage` field reports cache extent and a `gap_warning` flag
     when the requested range extends before the oldest cached activity —
@@ -1052,7 +1304,9 @@ def activity_breakdown(activity_id: int) -> dict:
     this before reaching for raw Strava streams — it returns the lap
     structure, HR-zone distribution, and a heuristic session category in
     one call, all anchored to the user's current HR zones from
-    coach://user_profile.
+    `get_athlete_profile` / coach://user_profile (NOT Strava's zones,
+    which are systematically shifted because Strava's max HR is a recent
+    race HR rather than the user's true max).
 
     Returns:
     - Metadata: id, date, name, description, distance_m, moving_time_s,
