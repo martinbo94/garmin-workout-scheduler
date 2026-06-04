@@ -22,63 +22,84 @@ import garmin_sync  # noqa: E402  (must load after dotenv so token refresh works
 import plan as plan_mod  # noqa: E402
 
 SERVER_INSTRUCTIONS = """
-This server is a personal running coach MCP. It hosts:
-- `coach://` resources: training_philosophy (Bakken Norwegian threshold
-  framework), user_profile (calibrated zones, paces, race PRs, athlete
-  profile A/B/C), plan_design, classification.
-- Tools for Garmin activity/wellness data, plan management, and gear.
+This server is a personal running coach MCP. It connects to Garmin
+Connect for workouts, activity history, and wellness data. It hosts
+`coach://` resources with training framework docs and the user's
+calibrated HR zones and profile.
 
-ROUTING RULES — read before any analytical task:
+━━━ FIRST SESSION — NEW USER SETUP ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-1. HR ZONES, PACES, ATHLETE PROFILE come from `get_athlete_profile`
-   (or `coach://user_profile`). NEVER use zones from third-party apps —
-   they may reflect stale settings or a different calibration method.
+At the start of any session, call `user_profile_status` silently.
+
+If the profile is missing or has placeholder values:
+1. Tell the user the server is set up but needs a personal profile.
+2. Ask: "Do you want to use the Bakken Norwegian threshold framework
+   as your training philosophy, or would you prefer to use this mainly
+   for creating/editing workouts and tracking health data?"
+3. Based on their answer:
+   - **Bakken framework**: walk through the full profile setup
+     (`user_profile_status` → ask questions → `init_user_profile`),
+     then offer to sync activities and explain the weekly review flow.
+   - **Workouts + health only**: still run the minimal profile setup
+     (max HR is needed for zone computation) but skip the framework
+     discussion. Explain the core tools: create_continuous_run /
+     create_interval_workout for building sessions, morning_check_in
+     for daily readiness, activity_breakdown for reviewing a session.
+4. After setup, offer to sync activities: `sync_activities()`.
+
+If the profile exists and is filled in, proceed normally.
+
+━━━ ROUTING RULES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. HR ZONES AND PACES come from `get_athlete_profile` (or
+   `coach://user_profile`). Never use zones from third-party apps —
+   they may use different calibration or be based on a race HR, not
+   the user's true max.
 
 2. ACTIVITY ANALYSIS: use `activity_breakdown(activity_id)` for any
-   single session. It returns lap classification (drag/pause/wu/cd),
-   per-lap zone_secs, session category, and overall zone distribution —
-   all anchored to the user's actual zones.
+   completed session. Returns lap classification, per-lap zone time,
+   session category, and overall zone distribution in one call.
 
-3. RECOVERY / READINESS: `morning_check_in` returns HRV, RHR, sleep
-   score + stages, Garmin training_status (PEAKING / PRODUCTIVE / etc.),
-   training_summary, and 7-day trend deltas with deviation flags. Pull
-   this BEFORE setting race goals or deciding whether to push a quality
-   session.
+3. RECOVERY / READINESS: `morning_check_in` returns HRV, RHR, sleep,
+   Garmin training_status, and 7-day trend deltas. Call it before
+   deciding whether to push a quality session.
 
-4. WEEKLY VOLUME / ZONE TIME: `weekly_summary` (this server, anchored to
-   user_profile zones).
+4. WEEKLY VOLUME / ZONE TIME: `weekly_summary`.
 
-5. STRAVA (if connected) is useful for segments, GPS routes, and social
-   features — not needed for activity analysis or zone computation.
+━━━ WHEN THE USER USES THE BAKKEN FRAMEWORK ━━━━━━━━━━━━━━━━━━━━━━━━
 
-PRE-ANALYSIS PROTOCOL (race goal, weekly review, plan tweak):
+Pre-analysis protocol (race goal, weekly review, plan tweak):
   a. `get_athlete_profile` — lock in zones, paces, PRs, profile A/B/C.
   b. `morning_check_in` — current readiness.
-  c. `weekly_summary` for the relevant window — volume + zone trend.
-  d. `activity_breakdown` for the specific reference sessions.
+  c. `weekly_summary` for the relevant window.
+  d. `activity_breakdown` for specific reference sessions.
   e. THEN reason — not before.
 
-INTERPRETATION RULES (apply when reasoning over activity data):
+Interpretation rules for interval sessions:
+- Use drag laps' `avg_hr` from `activity_breakdown.laps`, NEVER the
+  session-wide `avg_hr`. A 3×6 min sub-threshold session can show
+  session avg 165 bpm while the reps were at 184 — concluding "not
+  threshold" from session avg is the classic error.
+- HR-lag on the first rep: low-Z2 avg with Z3+ max still counts as a
+  working rep (the classifier rescues these via the pace co-signal).
 
-- For interval/quality sessions, ALWAYS use the drag laps' `avg_hr` from
-  `activity_breakdown.laps`, NEVER the session-wide `avg_hr`. The
-  session average is diluted by warmup, cooldown, and recovery jogs, so
-  it systematically understates working HR. A 3×6 min sub-threshold
-  session can show session avg 165 bpm while the reps themselves were
-  at 184 — concluding "not a threshold session" from session avg is a
-  classic error.
-- When a rep's `avg_hr` lands on a zone boundary, check its `max_hr`
-  too. HR-lag often produces low-Z2 avg with mid-Z3+ max on the first
-  rep — that's still a working rep (the classifier rescues these via
-  the pace co-signal).
-- The `session_category` field is heuristic; inspect `laps` directly for
-  sessions with interval-style names.
-
-ATHLETE PROFILE matters for race-goal estimation:
-- Profile A (VO2-strong, utilization-weak): Riegel/VDOT tend to
-  OVERESTIMATE. Bias goals slightly conservative.
-- Profile B (utilization-strong, VO2-weak): Riegel tends to underestimate.
+Athlete profile and race-goal estimation:
+- Profile A (VO2-strong, utilization-weak): Riegel/VDOT overestimate.
+  Bias goals slightly conservative.
+- Profile B (utilization-strong, VO2-weak): Riegel underestimates.
 - Profile C (balanced): Riegel/VDOT as-is.
+
+━━━ WHEN THE USER USES WORKOUTS + HEALTH ONLY ━━━━━━━━━━━━━━━━━━━━━━
+
+Core tools:
+- Build sessions: `create_continuous_run`, `create_interval_workout`
+- Schedule: `schedule_workout`, `reschedule_workout`, `swap_scheduled_workouts`
+- Review a session: `activity_breakdown`
+- Daily readiness: `morning_check_in`
+- Trends: `get_wellness_history`, `weekly_summary`
+
+Skip the Bakken-specific analysis (session_category, profile A/B/C,
+sub-threshold band) — just use HR zones and lap data directly.
 """.strip()
 
 mcp = FastMCP("garmin-coach", instructions=SERVER_INSTRUCTIONS)
@@ -1280,10 +1301,9 @@ def get_gear_for_activity(activity_id: int) -> dict:
     shoes were on yesterday's run?", "which shoe has the most threshold
     work on it?").
 
-    NOTE: takes a Garmin activity_id
-    in this MCP. Find it in the Garmin Connect URL
-    (`connect.garmin.com/modern/activity/<id>`) or via python-garminconnect's
-    `get_activities()`.
+    Takes a Garmin activity_id — find it in the Garmin Connect URL
+    (`connect.garmin.com/modern/activity/<id>`) or via
+    `sync_activities` + `weekly_summary`.
     """
     return _client().get_activity_gear(activity_id)
 
@@ -1295,9 +1315,7 @@ def activity_breakdown(activity_id: int) -> dict:
     this before reaching for raw activity data — it returns the lap
     structure, HR-zone distribution, and a heuristic session category in
     one call, all anchored to the user's current HR zones from
-    `get_athlete_profile` / coach://user_profile (NOT zones from third-party apps,
-    which may be stale or calibrated differently.
-    race HR rather than the user's true max).
+    `get_athlete_profile` / coach://user_profile.
 
     Returns:
     - Metadata: id, date, name, description, distance_m, moving_time_s,
