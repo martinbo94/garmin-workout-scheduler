@@ -18,6 +18,14 @@ DB_PATH = ROOT / "coach_data" / "cache.db"
 USER_PROFILE_PATH = ROOT / "coach_data" / "user_profile.md"
 INITIAL_BACKFILL_WEEKS = 12
 
+# Sport types that should get HR streams (cardio, not just running).
+_CARDIO_TYPES = {
+    "Run", "Rowing", "NordicSki", "RollerSki", "Ride", "Swim",
+    "indoor_cardio", "Workout",
+    # Raw typeKeys that might slip through the type map
+    "indoor_rowing", "track_running", "virtual_run",
+}
+
 # Garmin typeKey → sport_type label used in the cache and name_hint.
 _GARMIN_TYPE_MAP: dict[str, str] = {
     "running": "Run",
@@ -38,6 +46,9 @@ _GARMIN_TYPE_MAP: dict[str, str] = {
     "cross_country_skiing_ws": "NordicSki",
     "resort_skiing_snowboarding_ws": "AlpineSki",
     "rowing": "Rowing",
+    "indoor_rowing": "Rowing",
+    "track_running": "Run",
+    "virtual_run": "Run",
 }
 
 # Garmin intensityType → our lap_type tag.
@@ -162,10 +173,15 @@ def _activity_exists(act_id: int) -> bool:
 
 # ─── Garmin activity API ──────────────────────────────────────────────
 
-def _garmin_list_activities(garmin_client, since: datetime) -> list[dict]:
-    """Return all activities newer than `since`, newest-first from Garmin."""
+def _garmin_list_activities(
+    garmin_client,
+    since: datetime,
+    until: Optional[datetime] = None,
+) -> list[dict]:
+    """Return activities in (since, until] window, newest-first from Garmin."""
     all_acts: list[dict] = []
     since_ts = since.timestamp()
+    until_ts = until.timestamp() if until else None
     start = 0
     batch_size = 100
     while True:
@@ -184,7 +200,8 @@ def _garmin_list_activities(garmin_client, since: datetime) -> list[dict]:
             if ts < since_ts:
                 done = True
                 break
-            all_acts.append(act)
+            if until_ts is None or ts <= until_ts:
+                all_acts.append(act)
         if done or len(batch) < batch_size:
             break
         start += batch_size
@@ -271,10 +288,26 @@ def _store_laps(activity_id: int, laps: list[dict]) -> None:
 
 
 # ─── Sync ─────────────────────────────────────────────────────────────
+def clear_activity_cache() -> None:
+    """Drop and recreate activities, streams, and laps tables.
+
+    Wellness data is preserved. Call before a full Garmin re-sync to remove
+    stale Strava-sourced rows or duplicate entries.
+    """
+    _init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM laps")
+        conn.execute("DELETE FROM streams")
+        conn.execute("DELETE FROM activities")
+        conn.execute("DELETE FROM sync_state WHERE key='last_sync_at'")
+
+
 def run_sync(
     garmin_client,
     force_full: bool = False,
     weeks_back: Optional[int] = None,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
 ) -> dict:
     """Pull new activities + streams + laps from Garmin into the local cache.
 
@@ -282,10 +315,15 @@ def run_sync(
         garmin_client: Authenticated garminconnect.Garmin instance.
         force_full: If True, re-pull the default 12-week backfill window.
         weeks_back: Optional explicit backfill window in weeks.
+        since: Explicit start datetime (overrides weeks_back/force_full).
+        until: Optional end datetime — only activities before this are synced.
+            Used for month-by-month backfills.
     """
     _init_db()
 
-    if weeks_back is not None:
+    if since is not None:
+        after = since
+    elif weeks_back is not None:
         after = datetime.now(timezone.utc) - timedelta(weeks=weeks_back)
     elif force_full or _get_last_sync() is None:
         after = datetime.now(timezone.utc) - timedelta(weeks=INITIAL_BACKFILL_WEEKS)
@@ -295,7 +333,7 @@ def run_sync(
     sync_start = datetime.now(timezone.utc)
 
     try:
-        activities = _garmin_list_activities(garmin_client, after)
+        activities = _garmin_list_activities(garmin_client, after, until=until)
     except Exception as e:
         return {"error": f"Failed to fetch activity list: {type(e).__name__}: {e}"}
 
@@ -339,10 +377,10 @@ def run_sync(
             )
         new_count += 1
 
-        is_run = sport_type == "Run"
+        is_cardio = sport_type in _CARDIO_TYPES
         has_hr = bool(act.get("averageHR"))
 
-        if is_run and has_hr:
+        if is_cardio and has_hr:
             try:
                 stream = _garmin_get_stream(garmin_client, act_id)
             except Exception as e:
@@ -356,7 +394,7 @@ def run_sync(
                     )
                 streams_count += 1
 
-        if is_run:
+        if is_cardio and act.get("lapCount", 0) > 1:
             try:
                 laps = _garmin_get_laps(garmin_client, act_id)
             except Exception as e:
