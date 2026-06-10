@@ -1922,6 +1922,134 @@ def weekly_retrospective(week_start: str) -> dict:
     }
 
 
+# ─── Training load balance (ACWR) ─────────────────────────────────────
+@mcp.tool()
+def training_load_balance() -> dict:
+    """Compute Acute:Chronic Workload Ratio (ACWR) from the last 28 days of runs.
+
+    Uses `moving_time_s` as the load metric (no power meter required).
+
+    - Acute load  = total run minutes in the last 7 days × 4 (weekly equivalent).
+    - Chronic load = average weekly run minutes over the last 28 days.
+    - ACWR = acute / chronic.
+
+    ACWR zones:
+    - < 0.8 : undertraining / returning from break
+    - 0.8–1.3: optimal training zone
+    - 1.3–1.5: caution — elevated injury risk
+    - > 1.5 : high injury risk
+
+    Returns:
+        acute_load_min         : total run minutes in the last 7 days
+        chronic_load_min       : average weekly run minutes over the last 28 days
+        acwr                   : rounded to 2 dp (None if chronic is 0)
+        zone                   : one of 'undertraining', 'optimal', 'caution', 'high_risk'
+        recommendation         : coaching string
+        weekly_breakdown       : list of {week_start, week_end, run_minutes} for
+                                 the 4 most recent Mon-Sun weeks (oldest first)
+    """
+    import sqlite3 as _sqlite3
+    from datetime import date as _date, timedelta as _td
+
+    try:
+        today = _date.today()
+        # Align to Monday so weeks are consistent Mon-Sun buckets.
+        this_monday = today - _td(days=today.weekday())
+        window_start = (this_monday - _td(weeks=3)).isoformat()  # 4 weeks total
+        window_end = today.isoformat()
+
+        with _sqlite3.connect(garmin_sync.DB_PATH) as conn:
+            rows = conn.execute(
+                """
+                SELECT date(start_date_local) AS run_date,
+                       COALESCE(moving_time_s, 0) AS moving_time_s
+                FROM activities
+                WHERE sport_type = 'Run'
+                  AND date(start_date_local) BETWEEN ? AND ?
+                ORDER BY run_date
+                """,
+                (window_start, window_end),
+            ).fetchall()
+
+        # Build 4 Mon-Sun week buckets.
+        weeks: list[dict] = []
+        for week_offset in range(3, -1, -1):
+            wk_start = this_monday - _td(weeks=week_offset)
+            wk_end = wk_start + _td(days=6)
+            weeks.append({
+                "week_start": wk_start.isoformat(),
+                "week_end": wk_end.isoformat(),
+                "run_minutes": 0.0,
+            })
+
+        for run_date_str, moving_s in rows:
+            run_date = _date.fromisoformat(run_date_str)
+            for bucket in weeks:
+                if bucket["week_start"] <= run_date_str <= bucket["week_end"]:
+                    bucket["run_minutes"] += moving_s / 60.0
+                    break
+
+        # Round to 1 dp for readability.
+        for bucket in weeks:
+            bucket["run_minutes"] = round(bucket["run_minutes"], 1)
+
+        # Acute = this week's minutes (first entry is the oldest, last is current).
+        # The last bucket covers this_monday → today (partial week in progress).
+        acute_load_min = round(weeks[-1]["run_minutes"], 1)
+
+        # Chronic = mean weekly minutes across all 4 weeks.
+        chronic_load_min = round(sum(w["run_minutes"] for w in weeks) / 4.0, 1)
+
+        if chronic_load_min == 0:
+            acwr = None
+            zone = "undertraining"
+            recommendation = (
+                "No chronic load detected — you appear to be returning from a break "
+                "or have no cached runs. Sync activities first, then build gently."
+            )
+        else:
+            acwr = round(acute_load_min / chronic_load_min, 2)
+            if acwr < 0.8:
+                zone = "undertraining"
+                recommendation = (
+                    f"ACWR {acwr} — below the 0.8 floor. Training stimulus is low "
+                    "relative to your recent baseline. A moderate increase in volume "
+                    "or an additional easy session this week is appropriate."
+                )
+            elif acwr <= 1.3:
+                zone = "optimal"
+                recommendation = (
+                    f"ACWR {acwr} — in the optimal 0.8–1.3 zone. Load is well-matched "
+                    "to your chronic fitness. Maintain current structure."
+                )
+            elif acwr <= 1.5:
+                zone = "caution"
+                recommendation = (
+                    f"ACWR {acwr} — in the caution zone (1.3–1.5). Acute load is "
+                    "running ahead of your chronic base. Avoid adding further volume "
+                    "this week; prioritize recovery and easy running."
+                )
+            else:
+                zone = "high_risk"
+                recommendation = (
+                    f"ACWR {acwr} — above 1.5, elevated injury risk. Consider "
+                    "replacing tomorrow's quality session with an easy run or rest "
+                    "day to let chronic load catch up."
+                )
+
+        return {
+            "acute_load_min": acute_load_min,
+            "chronic_load_min": chronic_load_min,
+            "acwr": acwr,
+            "zone": zone,
+            "recommendation": recommendation,
+            "weekly_breakdown": weeks,
+        }
+
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
 # ─── Background startup sync ───────────────────────────────────────────
 def _startup_sync():
     try:
