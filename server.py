@@ -1895,6 +1895,164 @@ def morning_check_in() -> dict:
 
 
 @mcp.tool()
+def recovery_prediction(lookback_sessions: int = 8) -> dict:
+    """Predict how many days it typically takes to return to baseline HRV
+    after a quality session, based on your personal historical pattern.
+
+    For each quality session (threshold / intervals) in the last
+    `lookback_sessions` quality runs, finds how many days until HRV
+    returned to within the normal baseline band. Averages those to build
+    a personal recovery profile, then applies it to the most recent
+    quality session to estimate when you're likely fully recovered.
+
+    Args:
+        lookback_sessions: Number of past quality sessions to analyse.
+            Default 8 — enough for a stable average without going too far
+            back in time. Minimum 3 required for a useful prediction.
+
+    Returns:
+        - typical_recovery_days: your personal average (float)
+        - confidence: 'low' / 'medium' / 'high' based on sample size
+        - last_quality_session: date and type of the most recent hard session
+        - predicted_recovered_by: estimated date of full HRV recovery
+        - already_recovered: True if HRV is already back in baseline range
+        - sample: list of past sessions with their measured recovery days
+        - note: human-readable summary
+    """
+    import sqlite3 as _sq
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    try:
+        _db = garmin_sync.DB_PATH
+
+        # ── 1. Find quality sessions (threshold / intervals) ──────────
+        with _sq.connect(_db) as conn:
+            conn.row_factory = _sq.Row
+            acts = conn.execute("""
+                SELECT id, start_date_local, name, sport_type, avg_hr
+                FROM activities
+                WHERE sport_type = 'Run'
+                ORDER BY start_date_local DESC
+                LIMIT 120
+            """).fetchall()
+
+        quality = []
+        for a in acts:
+            hint = garmin_sync.name_hint(a["name"], a["sport_type"])
+            if hint in ("threshold", "intervals", "tempo", "race"):
+                quality.append(dict(a))
+            if len(quality) >= lookback_sessions + 2:
+                break
+
+        if not quality:
+            return {
+                "error": "No quality sessions found in recent history.",
+                "note": "Record some threshold or interval sessions first.",
+            }
+
+        # ── 2. For each quality session, find days until HRV recovered ─
+        with _sq.connect(_db) as conn:
+            conn.row_factory = _sq.Row
+            wellness = conn.execute("""
+                SELECT date, hrv_overnight_avg, hrv_baseline_low, hrv_baseline_upper,
+                       hrv_status
+                FROM wellness_daily
+                WHERE hrv_overnight_avg IS NOT NULL
+                ORDER BY date ASC
+            """).fetchall()
+
+        wellness_by_date = {r["date"]: dict(r) for r in wellness}
+
+        def _hrv_in_baseline(w: dict) -> bool:
+            hrv = w.get("hrv_overnight_avg")
+            lo = w.get("hrv_baseline_low")
+            hi = w.get("hrv_baseline_upper")
+            if hrv is None:
+                return False
+            if lo and hi:
+                return lo <= hrv <= hi
+            # Fallback: use Garmin's status string
+            status = (w.get("hrv_status") or "").lower()
+            return status in ("balanced", "good")
+
+        sample = []
+        for sess in quality[:lookback_sessions]:
+            sess_date = sess["start_date_local"][:10]
+            recovery_days = None
+            for d in range(1, 8):
+                check_date = (
+                    _dt.strptime(sess_date, "%Y-%m-%d") + _td(days=d)
+                ).strftime("%Y-%m-%d")
+                w = wellness_by_date.get(check_date)
+                if w and _hrv_in_baseline(w):
+                    recovery_days = d
+                    break
+            if recovery_days is not None:
+                sample.append({
+                    "date": sess_date,
+                    "session_type": garmin_sync.name_hint(sess["name"], sess["sport_type"]),
+                    "name": sess["name"],
+                    "recovery_days": recovery_days,
+                })
+
+        if len(sample) < 2:
+            return {
+                "error": "Not enough HRV data to build a recovery pattern.",
+                "sessions_found": len(quality),
+                "sessions_with_hrv_data": len(sample),
+                "note": "Wear your watch overnight more consistently to build this model.",
+            }
+
+        avg_recovery = round(sum(s["recovery_days"] for s in sample) / len(sample), 1)
+        n = len(sample)
+        confidence = "high" if n >= 6 else "medium" if n >= 3 else "low"
+
+        # ── 3. Apply to most recent quality session ────────────────────
+        last_sess = quality[0]
+        last_date = last_sess["start_date_local"][:10]
+        predicted_date = (
+            _dt.strptime(last_date, "%Y-%m-%d") + _td(days=round(avg_recovery))
+        ).strftime("%Y-%m-%d")
+
+        # Check if already recovered: either today's HRV is in baseline,
+        # or the predicted date has already passed.
+        today_str = _dt.now(_tz.utc).strftime("%Y-%m-%d")
+        today_wellness = wellness_by_date.get(today_str)
+        already = (
+            predicted_date <= today_str
+            or bool(today_wellness and _hrv_in_baseline(today_wellness))
+        )
+
+        note = (
+            f"Based on {n} past sessions, your HRV typically recovers in "
+            f"{avg_recovery} days after a quality session. "
+        )
+        if already:
+            note += "Today's HRV is already back in baseline — you're recovered."
+        else:
+            note += f"After your last quality session ({last_date}), "
+            note += f"expect full recovery around {predicted_date}."
+
+        return {
+            "typical_recovery_days": avg_recovery,
+            "confidence": confidence,
+            "sample_size": n,
+            "last_quality_session": {
+                "date": last_date,
+                "name": last_sess["name"],
+                "type": garmin_sync.name_hint(last_sess["name"], last_sess["sport_type"]),
+            },
+            "predicted_recovered_by": predicted_date,
+            "already_recovered": already,
+            "sample": sample,
+            "note": note,
+        }
+
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+@mcp.tool()
 def weekly_retrospective(week_start: str) -> dict:
     """Combined weekly summary + plan compliance for one Mon-Sun week.
 
