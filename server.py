@@ -113,7 +113,7 @@ def classification_rules() -> str:
 
     Read this before summarizing a week of training or analyzing a session.
     """
-    return (_COACH_DATA / "classification.md").read_text(encoding="utf-8")
+    return (_COACH_DATA / "workout_classification.md").read_text(encoding="utf-8")
 
 
 _USER_PROFILE_PATH = _COACH_DATA / "user_profile.md"
@@ -147,7 +147,7 @@ def read_coach_doc(name: Literal["user_profile", "training_philosophy", "classif
     paths = {
         "user_profile": _USER_PROFILE_PATH,
         "training_philosophy": _COACH_DATA / "training_philosophy.md",
-        "classification": _COACH_DATA / "classification.md",
+        "classification": _COACH_DATA / "workout_classification.md",
         "plan_design": _COACH_DATA / "plan_design.md",
     }
     return paths[name].read_text(encoding="utf-8")

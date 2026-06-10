@@ -166,7 +166,7 @@ requirements.txt
 .env.example                    # credential template
 .env                            # your secrets (gitignored)
 coach_data/
-  classification.md           # activity classification rules → coach://classification
+  workout_classification.md           # activity classification rules → coach://classification
   training_philosophy.md      # Bakken framework             → coach://training_philosophy
   plan_design.md               # planning guide              → coach://plan_design
   user_profile.md             # YOUR values (gitignored)     → coach://user_profile
@@ -177,7 +177,7 @@ coach_data/
     plan.example.json         # sample 1-week Bakken plan structure
 ```
 
-The framework docs (`classification.md`, `training_philosophy.md`,
+The framework docs (`workout_classification.md`, `training_philosophy.md`,
 `plan_design.md`) and all code are committed and shareable. Your HR
 zones, plan, and cached activities live alongside them but stay out of
 git.

@@ -418,14 +418,26 @@ def run_sync(
 
 # ─── Name-based classification hint ───────────────────────────────────
 _NAME_PATTERNS = [
-    ("prog-long", re.compile(r"progressiv langtur|progressive long", re.I)),
-    ("long", re.compile(r"langtur|long run", re.I)),
-    ("threshold", re.compile(r"terskel|subterskel|threshold", re.I)),
-    ("tempo", re.compile(r"tempo", re.I)),
-    ("intervals", re.compile(r"intervall|pyramide|vo2", re.I)),
-    ("race", re.compile(r"stafett|etappe", re.I)),
+    # Each pattern covers common English terms + Norwegian equivalents.
+    # Add your own naming conventions in coach_data/workout_classification.md and
+    # extend these regexes if you use a different language or convention.
+    ("prog-long", re.compile(
+        r"progressiv langtur|progressive long|prog.?long", re.I)),
+    ("long", re.compile(
+        r"langtur|long run|long easy", re.I)),
+    ("threshold", re.compile(
+        r"terskel|subterskel|threshold|sub.?threshold|tempo.?run", re.I)),
+    ("tempo", re.compile(
+        r"^tempo", re.I)),
+    ("intervals", re.compile(
+        r"intervall|interval|pyramide|pyramid|vo2|speed.?work|track", re.I)),
+    ("race", re.compile(
+        r"stafett|etappe|race|parkrun|\bfun run\b|\b5k\b|\b10k\b|\bhalf marathon\b|\bmarathon\b", re.I)),
 ]
-_DEFAULT_RUN_NAMES = re.compile(r"^(morning|afternoon|evening|lunch)\s+run", re.I)
+_DEFAULT_RUN_NAMES = re.compile(
+    r"^(morning|afternoon|evening|lunch|easy|recovery|slow|base|aerobic|zone ?2)\s*(run|jog|løp)?$",
+    re.I,
+)
 
 
 def name_hint(name: str, sport_type: Optional[str]) -> str:

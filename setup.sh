@@ -5,8 +5,23 @@
 set -e
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
-PYTHON="$REPO/.venv/bin/python"
-CONFIG_DIR="$HOME/Library/Application Support/Claude"
+
+# Python binary path (same on Mac and Linux; Windows uses Scripts/python.exe)
+if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OS" == "Windows_NT" ]]; then
+    PYTHON="$REPO/.venv/Scripts/python.exe"
+else
+    PYTHON="$REPO/.venv/bin/python"
+fi
+
+# Claude Desktop config location varies by OS
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    CONFIG_DIR="$HOME/Library/Application Support/Claude"
+elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OS" == "Windows_NT" ]]; then
+    CONFIG_DIR="$APPDATA/Claude"
+else
+    # Linux
+    CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/Claude"
+fi
 CONFIG_FILE="$CONFIG_DIR/claude_desktop_config.json"
 
 echo ""
