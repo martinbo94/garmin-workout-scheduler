@@ -50,7 +50,7 @@ doesn't re-hit the API on every query.
 ### Requirements
 
 - Python 3.10+ ([download](https://www.python.org/downloads/))
-- Garmin Connect account — **no MFA** (see caveat below)
+- Garmin Connect account (MFA supported)
 - Claude Desktop ([download](https://claude.ai/download)) **or** Claude Code CLI
 
 ### Quick setup (Mac)
@@ -63,22 +63,23 @@ replacing the path in the last one with wherever you cloned the repo:
 git --version
 
 # 2. Clone the repo
-git clone https://github.com/<owner>/garmin-coach-mcp.git
-cd garmin-coach-mcp
+git clone https://github.com/martinbo94/garmin-workout-scheduler.git
+cd garmin-workout-scheduler
 
-# 3. Run the setup script — installs dependencies and registers with Claude Desktop
+# 3. Run the setup script
 bash setup.sh
 ```
 
-The script:
-- Installs Python dependencies into a local `.venv` folder
-- Creates a `.env` file for your credentials
-- Adds the server to Claude Desktop's config automatically
+The script installs dependencies, creates `.env`, authenticates with Garmin
+(including MFA if enabled), and registers the server with Claude Desktop.
 
-After it finishes:
-1. Open `.env` in any text editor and fill in your Garmin email and password
-2. Restart Claude Desktop
-3. Start a new chat and say **"Let's set up my profile"**
+**First run:** the script will stop after creating `.env` and ask you to fill
+in your Garmin email and password. Do that, then run `bash setup.sh` again —
+it will authenticate and complete setup.
+
+After setup finishes:
+1. Restart Claude Desktop
+2. Start a new chat and say **"Let's set up my profile"**
 
 ### Manual setup (Claude Code or Windows)
 
@@ -112,7 +113,7 @@ claude mcp add -s user garmin-coach -- \
 
 ### First-time setup in Claude
 
-Restart Claude Code, then in a fresh session:
+Restart Claude, then in a fresh session:
 
 ```
 # Verify the server is registered and healthy
