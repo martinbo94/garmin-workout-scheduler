@@ -1922,6 +1922,181 @@ def weekly_retrospective(week_start: str) -> dict:
     }
 
 
+# ─── Progress report ──────────────────────────────────────────────────
+@mcp.tool()
+def progress_report(
+    session_type: Literal["threshold", "intervals", "long", "easy", "tempo"],
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> dict:
+    """Compare the same session type over time to track fitness progress.
+
+    Queries the local activity cache and filters sessions matching the
+    requested type via name-based classification. For each matching session
+    returns date, name, distance, avg HR, duration, and pace. Computes a
+    trend summary by comparing the first half vs second half of the range
+    — improving HR efficiency shows as pace improving at the same or lower HR.
+
+    Args:
+        session_type: One of 'threshold', 'intervals', 'long', 'easy', 'tempo'.
+        start_date: 'YYYY-MM-DD' (inclusive). Defaults to 90 days ago.
+        end_date:   'YYYY-MM-DD' (inclusive). Defaults to today.
+
+    Returns:
+    - `sessions`: up to 50 most recent matching sessions (date, name,
+      distance_km, avg_hr, moving_time_s, pace_s_per_km, classification_hint).
+    - `trend`: first_half vs second_half comparison of avg_hr, avg_pace,
+      count, plus an `assessment` label: 'improving', 'stable', or 'declining'.
+    - `session_type`: the queried type.
+    - `date_range`: effective start/end dates used.
+    - `note`: human-readable summary.
+
+    This helps answer "is my threshold pace improving at the same HR over time?"
+    Requires activities in the local cache — call sync_activities() if data
+    appears to be missing.
+    """
+    import sqlite3 as _sqlite3
+    from datetime import date as _date, timedelta as _td
+
+    try:
+        today = _date.today()
+        effective_end = end_date or today.isoformat()
+        effective_start = start_date or (today - _td(days=90)).isoformat()
+
+        # Aliases: 'tempo' maps to the same name_hint label
+        _type_aliases = {
+            "threshold": {"threshold"},
+            "intervals": {"intervals"},
+            "long": {"long", "prog-long"},
+            "easy": {"easy"},
+            "tempo": {"tempo"},
+        }
+        target_hints = _type_aliases.get(session_type, {session_type})
+
+        with _sqlite3.connect(garmin_sync.DB_PATH) as conn:
+            conn.row_factory = _sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT id, start_date_local, name, sport_type,
+                       distance_m, moving_time_s, avg_hr
+                FROM activities
+                WHERE date(start_date_local) BETWEEN ? AND ?
+                  AND sport_type = 'Run'
+                ORDER BY start_date_local DESC
+                LIMIT 500
+                """,
+                (effective_start, effective_end),
+            ).fetchall()
+
+        sessions = []
+        for r in rows:
+            hint = garmin_sync.name_hint(r["name"], r["sport_type"])
+            if hint not in target_hints:
+                continue
+            dist_m = r["distance_m"] or 0
+            dist_km = round(dist_m / 1000, 2) if dist_m else None
+            time_s = r["moving_time_s"]
+            pace = (
+                round(time_s / (dist_m / 1000))
+                if (time_s and dist_m and dist_m > 0)
+                else None
+            )
+            sessions.append({
+                "date": r["start_date_local"][:10],
+                "name": r["name"],
+                "distance_km": dist_km,
+                "avg_hr": r["avg_hr"],
+                "moving_time_s": time_s,
+                "pace_s_per_km": pace,
+                "classification_hint": hint,
+            })
+            if len(sessions) >= 50:
+                break
+
+        # Sessions are newest-first; reverse to chronological order for trend math
+        sessions_chrono = list(reversed(sessions))
+
+        def _halves_stats(items):
+            """Return (avg_hr, avg_pace, count) for a list of session dicts."""
+            hrs = [s["avg_hr"] for s in items if s["avg_hr"] is not None]
+            paces = [s["pace_s_per_km"] for s in items if s["pace_s_per_km"] is not None]
+            avg_hr = round(sum(hrs) / len(hrs), 1) if hrs else None
+            avg_pace = round(sum(paces) / len(paces)) if paces else None
+            return {"avg_hr": avg_hr, "avg_pace_s_per_km": avg_pace, "count": len(items)}
+
+        trend: dict = {}
+        if len(sessions_chrono) >= 2:
+            mid = len(sessions_chrono) // 2
+            first_half = sessions_chrono[:mid]
+            second_half = sessions_chrono[mid:]
+            first_stats = _halves_stats(first_half)
+            second_stats = _halves_stats(second_half)
+
+            # Assessment logic:
+            # Improving = pace got faster (lower s/km) AND HR stayed same or dropped
+            #           OR pace same/faster AND HR dropped meaningfully (>2 bpm)
+            # Declining = pace got slower AND/OR HR climbed
+            # Stable = minor changes within noise
+            assessment = "stable"
+            if first_stats["avg_pace_s_per_km"] and second_stats["avg_pace_s_per_km"]:
+                pace_delta = second_stats["avg_pace_s_per_km"] - first_stats["avg_pace_s_per_km"]
+                hr_delta = (
+                    (second_stats["avg_hr"] or 0) - (first_stats["avg_hr"] or 0)
+                    if (first_stats["avg_hr"] and second_stats["avg_hr"])
+                    else 0.0
+                )
+                if pace_delta < -5 and hr_delta <= 2:
+                    assessment = "improving"
+                elif pace_delta > 5 and hr_delta >= -2:
+                    assessment = "declining"
+                elif hr_delta < -2 and pace_delta <= 5:
+                    # HR dropped with similar or faster pace → improving efficiency
+                    assessment = "improving"
+                elif hr_delta > 3 and pace_delta >= -2:
+                    assessment = "declining"
+
+            trend = {
+                "first_half": first_stats,
+                "second_half": second_stats,
+                "pace_delta_s_per_km": (
+                    second_stats["avg_pace_s_per_km"] - first_stats["avg_pace_s_per_km"]
+                    if (second_stats["avg_pace_s_per_km"] and first_stats["avg_pace_s_per_km"])
+                    else None
+                ),
+                "hr_delta_bpm": (
+                    round(second_stats["avg_hr"] - first_stats["avg_hr"], 1)
+                    if (second_stats["avg_hr"] and first_stats["avg_hr"])
+                    else None
+                ),
+                "assessment": assessment,
+            }
+        elif sessions_chrono:
+            trend = {"assessment": "insufficient_data", "note": "Need at least 2 sessions for trend analysis."}
+        else:
+            trend = {"assessment": "no_data"}
+
+        total = len(sessions)
+        note = (
+            f"Found {total} {session_type} session(s) between {effective_start} and {effective_end}."
+        )
+        if total == 0:
+            note += (
+                f" No sessions classified as '{session_type}' in this range. "
+                "Try sync_activities() or check session names match the classification patterns."
+            )
+
+        return {
+            "session_type": session_type,
+            "date_range": {"start": effective_start, "end": effective_end},
+            "sessions": sessions,
+            "trend": trend,
+            "note": note,
+        }
+
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
 # ─── Background startup sync ───────────────────────────────────────────
 def _startup_sync():
     try:
