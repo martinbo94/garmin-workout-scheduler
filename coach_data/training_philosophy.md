@@ -245,9 +245,10 @@ push the upper end on the final rep if you're feeling strong.
 > *"Det er bedre å avslutte med følelsen av at du kunne gjort mer, enn å
 > ha presset deg for hardt i starten, for så å måtte redusere
 > intensiteten senere."*
-
-(Better to finish feeling you could have done more than to push too hard
-early and need to scale back later.)
+> — Bakken
+>
+> *(Better to finish feeling you could have done more than to push too hard
+> early and need to scale back later.)*
 
 ---
 

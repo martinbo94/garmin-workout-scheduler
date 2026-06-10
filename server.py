@@ -45,7 +45,9 @@ If the profile is missing or has placeholder values:
      discussion. Explain the core tools: create_continuous_run /
      create_interval_workout for building sessions, morning_check_in
      for daily readiness, activity_breakdown for reviewing a session.
-4. After setup, offer to sync activities: `sync_activities()`.
+4. After setup, offer to sync activities: `sync_activities()`. Mention
+   that the default window is 12 weeks, and they can call
+   `sync_activities(weeks_back=52)` for a full year of history.
 
 If the profile exists and is filled in, proceed normally.
 
@@ -155,30 +157,42 @@ def read_coach_doc(name: Literal["user_profile", "training_philosophy", "classif
 
 # ─── First-time profile setup ──────────────────────────────────────────
 _PROFILE_SETUP_QUESTIONS = [
+    # Essential — asked in both Bakken and minimal mode.
     {
         "field": "max_hr",
         "required": True,
+        "framework_only": False,
         "question": (
             "What's your max heart rate? If you've measured it (a maximum-effort 5k, "
-            "hill repeats, or a lab test), use that value. '220 − age' is a starting "
-            "estimate but typically underestimates well-trained runners."
+            "hill repeats, or a lab test), use that value. '220 − age' is a rough "
+            "estimate but typically underestimates well-trained athletes."
         ),
     },
     {
         "field": "zone_ceilings",
         "required": False,
+        "framework_only": False,
         "question": (
-            "I'll use the Olympiatoppen 5-zone system by default — Z1-Z4 ceilings "
-            "computed from 72/82/87/92% of your max HR. (Note: Garmin's own defaults "
-            "are different; if you've set custom Olympiatoppen zones in Garmin "
-            "Connect, give me those bpm values verbatim so the in-watch zones match "
-            "what this MCP uses. Otherwise I'll compute defaults and you can set "
-            "Garmin to match later.)"
+            "Do you have custom HR zones set in Garmin Connect? If yes, give me the "
+            "four upper boundaries (Z1, Z2, Z3, Z4 ceilings) in bpm so this MCP uses "
+            "the same zones as your watch. If not, I'll compute sensible defaults from "
+            "your max HR."
         ),
     },
     {
+        "field": "race_prs",
+        "required": False,
+        "framework_only": False,
+        "question": (
+            "What are your current PRs for 5k, 10k, half marathon, marathon? "
+            "Leave out any distance you haven't raced. Times like '23:08' or '1:45:30'."
+        ),
+    },
+    # Framework-specific — only asked when user has chosen the Bakken method.
+    {
         "field": "lt2_hr",
         "required": False,
+        "framework_only": True,
         "question": (
             "Have you had a lactate / VO2max test? If yes, what was your LT2 HR "
             "(classical threshold, ~4 mmol)? The HR at the highest sustainable "
@@ -188,41 +202,34 @@ _PROFILE_SETUP_QUESTIONS = [
     {
         "field": "lt1_hr",
         "required": False,
+        "framework_only": True,
         "question": (
             "From the same test, what was your LT1 HR (aerobic threshold, ~2 mmol)? "
-            "The boundary between truly easy and aerobic-moderate. Important because "
-            "it becomes your hard cap on easy runs in the Bakken framework."
+            "This becomes your hard cap on easy runs in the Bakken framework."
         ),
     },
     {
         "field": "vo2max",
         "required": False,
+        "framework_only": True,
         "question": (
-            "What's your VO2max (ml/min/kg) from the test? Optional context — useful "
-            "for reasoning about whether VO2 work or threshold work is your bigger "
-            "lever."
+            "What's your VO2max (ml/min/kg) from the test? Useful for reasoning about "
+            "whether VO2 work or threshold work is your bigger lever (Profile A vs B)."
         ),
     },
     {
         "field": "weight_kg",
         "required": False,
+        "framework_only": True,
         "question": "Body weight in kg? Optional, for VO2max L/min context.",
-    },
-    {
-        "field": "race_prs",
-        "required": False,
-        "question": (
-            "What are your current PRs for 5k, 10k, half marathon, marathon? "
-            "Anything you haven't raced, leave out. Times like '23:08' or '1:45:30'. "
-            "PRs are a better fitness anchor than treadmill test pace numbers."
-        ),
     },
     {
         "field": "notes",
         "required": False,
+        "framework_only": False,
         "question": (
-            "Any context worth recording at the bottom of the profile? Recent injuries, "
-            "planned races, training history, current limitations, etc."
+            "Any context worth recording? Recent injuries, planned races, training "
+            "history, current limitations, etc."
         ),
     },
 ]
@@ -233,26 +240,32 @@ def user_profile_status() -> dict:
     """Check whether user_profile.md exists and is filled in.
 
     Returns existence flag, file path, whether the file still has placeholder
-    values from the example template, AND a structured list of
-    `suggested_questions` to walk the user through if setup is needed.
+    values from the example template, AND structured question lists split by
+    mode:
+    - `essential_questions`: asked regardless of training framework.
+    - `framework_questions`: only asked when the user has chosen the Bakken
+      Norwegian threshold method (lactate test data, LT1/LT2, VO2max, etc.).
 
     Call this at the start of a fresh session or whenever you suspect the
-    profile isn't set up. Each `suggested_questions` entry has a `field`
-    (matching an `init_user_profile` parameter), `required` flag, and
-    `question` text to ask the user.
+    profile isn't set up.
 
     After collecting answers, call `init_user_profile()` with whatever the
     user provided.
     """
+    essential = [q for q in _PROFILE_SETUP_QUESTIONS if not q["framework_only"]]
+    framework = [q for q in _PROFILE_SETUP_QUESTIONS if q["framework_only"]]
+
     if not _USER_PROFILE_PATH.exists():
         return {
             "exists": False,
             "path": str(_USER_PROFILE_PATH),
-            "suggested_questions": _PROFILE_SETUP_QUESTIONS,
+            "essential_questions": essential,
+            "framework_questions": framework,
             "next_step": (
-                "Walk the user through the questions in suggested_questions in order. "
-                "max_hr is the only required field; for the rest, accept whatever the "
-                "user provides or knows. Then call init_user_profile() with the answers."
+                "Ask the user whether they want to use the Bakken Norwegian threshold "
+                "framework or just track workouts and health. Then walk through "
+                "essential_questions (both modes) and, if Bakken, also framework_questions. "
+                "max_hr is the only required field. Call init_user_profile() with answers."
             ),
         }
 
@@ -267,11 +280,11 @@ def user_profile_status() -> dict:
         "placeholders_found": found,
     }
     if found:
-        result["suggested_questions"] = _PROFILE_SETUP_QUESTIONS
+        result["essential_questions"] = essential
+        result["framework_questions"] = framework
         result["next_step"] = (
             f"Profile exists but still has template placeholders: {found}. Walk through "
-            "suggested_questions to collect real values, then call "
-            "init_user_profile(overwrite=True)."
+            "the questions to collect real values, then call init_user_profile(overwrite=True)."
         )
     else:
         result["next_step"] = "Profile looks filled in — no setup action needed."

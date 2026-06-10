@@ -119,8 +119,11 @@ Restart Claude, then in a fresh session:
 # Verify the server is registered and healthy
 > test garmin connection
 
-# Pull activity history into the local cache (syncs last 12 weeks)
+# Pull activity history into the local cache (syncs last 12 weeks by default)
 > sync my activities
+
+# To sync more history (e.g. a full year):
+> sync my activities for the last 52 weeks
 
 # Set up your training profile — Claude walks you through it
 > Let's set up my profile
