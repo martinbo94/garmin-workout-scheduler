@@ -1727,6 +1727,278 @@ def activity_breakdown(activity_id: int) -> dict:
 
 
 @mcp.tool()
+def running_form_trends(activities_to_analyze: int = 20) -> dict:
+    """Track running dynamics (form) over recent runs using Garmin data.
+
+    Fetches the last 30 activities from Garmin, filters to runs, and
+    extracts running dynamics: cadence, ground contact time, vertical
+    oscillation, stride length, and vertical ratio.
+
+    Args:
+        activities_to_analyze: How many recent runs to include in the
+            analysis. Default 20. Must be between 1 and 30.
+
+    Returns:
+        - per_activity: list of {date, distance_km, cadence, ground_contact_ms,
+          vertical_osc_cm, stride_length_m, vertical_ratio_pct}
+        - averages: mean of each metric across all analyzed runs
+        - trends: comparison of first half vs second half of analyzed window
+          (improving/stable/declining per metric, and raw values)
+        - ratings: dict of metric → 'elite'/'good'/'needs_work' based on
+          Garmin benchmarks
+        - insights: list of human-readable coaching observations
+
+    Garmin benchmarks used for ratings:
+        - Cadence (spm): ≥180 elite, 170-179 good, <165 needs work
+        - Ground contact (ms): <200 elite, 200-240 good, >260 needs work
+        - Vertical oscillation (cm): <6 elite, 6-8 good, >10 needs work
+        - Vertical ratio (%): <6 elite, 6-8 good, >10 needs work
+    """
+    try:
+        activities_to_analyze = max(1, min(30, activities_to_analyze))
+        raw = _client().get_activities(0, 30)
+        if not raw:
+            return {"error": "No activities returned from Garmin API."}
+
+        runs = [
+            a for a in raw
+            if (a.get("activityType") or {}).get("typeKey", "").endswith("running")
+            or (a.get("activityType") or {}).get("typeKey", "") in (
+                "running", "indoor_running", "treadmill_running",
+                "trail_running", "track_running", "virtual_run",
+            )
+        ]
+
+        if not runs:
+            return {"error": "No running activities found in the last 30 activities."}
+
+        runs = runs[:activities_to_analyze]
+
+        per_activity = []
+        for act in runs:
+            date_str = (act.get("startTimeLocal") or "")[:10]
+            dist_m = act.get("distance") or 0
+            dist_km = round(dist_m / 1000, 2) if dist_m else None
+
+            cadence = act.get("averageRunningCadenceInStepsPerMinute")
+            gct = act.get("avgGroundContactTime")       # milliseconds
+            vo = act.get("avgVerticalOscillation")       # centimeters
+            stride = act.get("avgStrideLength")          # meters
+            vr = act.get("avgVerticalRatio")             # percent
+
+            # Skip activities with no running dynamics at all
+            if all(v is None for v in (cadence, gct, vo, stride, vr)):
+                continue
+
+            per_activity.append({
+                "date": date_str,
+                "distance_km": dist_km,
+                "cadence": round(cadence, 1) if cadence is not None else None,
+                "ground_contact_ms": round(gct, 1) if gct is not None else None,
+                "vertical_osc_cm": round(vo, 1) if vo is not None else None,
+                "stride_length_m": round(stride, 2) if stride is not None else None,
+                "vertical_ratio_pct": round(vr, 1) if vr is not None else None,
+            })
+
+        if not per_activity:
+            return {
+                "error": (
+                    "No running dynamics data found. Your Garmin device may not "
+                    "record running form metrics, or no runs have been synced yet."
+                ),
+                "activities_checked": len(runs),
+            }
+
+        def _avg(field: str) -> Optional[float]:
+            vals = [a[field] for a in per_activity if a.get(field) is not None]
+            return round(sum(vals) / len(vals), 1) if vals else None
+
+        averages = {
+            "cadence": _avg("cadence"),
+            "ground_contact_ms": _avg("ground_contact_ms"),
+            "vertical_osc_cm": _avg("vertical_osc_cm"),
+            "stride_length_m": _avg("stride_length_m"),
+            "vertical_ratio_pct": _avg("vertical_ratio_pct"),
+            "runs_with_data": len(per_activity),
+        }
+
+        # Trends: first half vs second half (chronological order — oldest first)
+        # per_activity is newest-first (Garmin API order), so reverse for trend calc
+        ordered = list(reversed(per_activity))
+        mid = len(ordered) // 2
+        first_half = ordered[:mid] if mid > 0 else []
+        second_half = ordered[mid:] if mid > 0 else ordered
+
+        def _half_avg(half: list[dict], field: str) -> Optional[float]:
+            vals = [a[field] for a in half if a.get(field) is not None]
+            return round(sum(vals) / len(vals), 1) if vals else None
+
+        def _trend_direction(field: str, higher_is_better: bool) -> str:
+            """Return 'improving', 'stable', or 'declining'."""
+            a = _half_avg(first_half, field)
+            b = _half_avg(second_half, field)
+            if a is None or b is None:
+                return "insufficient_data"
+            delta = b - a
+            threshold = abs(a) * 0.02  # 2% change threshold for "stable"
+            if abs(delta) <= threshold:
+                return "stable"
+            if (delta > 0) == higher_is_better:
+                return "improving"
+            return "declining"
+
+        trends = {
+            "cadence": {
+                "direction": _trend_direction("cadence", higher_is_better=True),
+                "first_half_avg": _half_avg(first_half, "cadence"),
+                "second_half_avg": _half_avg(second_half, "cadence"),
+            },
+            "ground_contact_ms": {
+                "direction": _trend_direction("ground_contact_ms", higher_is_better=False),
+                "first_half_avg": _half_avg(first_half, "ground_contact_ms"),
+                "second_half_avg": _half_avg(second_half, "ground_contact_ms"),
+            },
+            "vertical_osc_cm": {
+                "direction": _trend_direction("vertical_osc_cm", higher_is_better=False),
+                "first_half_avg": _half_avg(first_half, "vertical_osc_cm"),
+                "second_half_avg": _half_avg(second_half, "vertical_osc_cm"),
+            },
+            "stride_length_m": {
+                "direction": _trend_direction("stride_length_m", higher_is_better=True),
+                "first_half_avg": _half_avg(first_half, "stride_length_m"),
+                "second_half_avg": _half_avg(second_half, "stride_length_m"),
+            },
+            "vertical_ratio_pct": {
+                "direction": _trend_direction("vertical_ratio_pct", higher_is_better=False),
+                "first_half_avg": _half_avg(first_half, "vertical_ratio_pct"),
+                "second_half_avg": _half_avg(second_half, "vertical_ratio_pct"),
+            },
+        }
+
+        # Ratings based on Garmin benchmarks
+        def _rate_cadence(v: Optional[float]) -> Optional[str]:
+            if v is None:
+                return None
+            if v >= 180:
+                return "elite"
+            if v >= 170:
+                return "good"
+            return "needs_work"
+
+        def _rate_gct(v: Optional[float]) -> Optional[str]:
+            if v is None:
+                return None
+            if v < 200:
+                return "elite"
+            if v <= 240:
+                return "good"
+            return "needs_work"
+
+        def _rate_vo(v: Optional[float]) -> Optional[str]:
+            if v is None:
+                return None
+            if v < 6:
+                return "elite"
+            if v <= 8:
+                return "good"
+            return "needs_work"
+
+        def _rate_vr(v: Optional[float]) -> Optional[str]:
+            if v is None:
+                return None
+            if v < 6:
+                return "elite"
+            if v <= 8:
+                return "good"
+            return "needs_work"
+
+        ratings = {
+            "cadence": _rate_cadence(averages["cadence"]),
+            "ground_contact_ms": _rate_gct(averages["ground_contact_ms"]),
+            "vertical_osc_cm": _rate_vo(averages["vertical_osc_cm"]),
+            "vertical_ratio_pct": _rate_vr(averages["vertical_ratio_pct"]),
+        }
+
+        # Insights
+        insights: list[str] = []
+
+        cad = averages.get("cadence")
+        if cad is not None:
+            if cad < 165:
+                insights.append(
+                    f"Cadence is low at {cad} spm — focus on quick, light steps. "
+                    "A metronome or cadence cue during easy runs can help."
+                )
+            elif cad < 170:
+                insights.append(
+                    f"Cadence ({cad} spm) is below the 170 spm threshold — "
+                    "some improvement possible."
+                )
+            elif cad >= 180:
+                insights.append(f"Cadence is elite at {cad} spm.")
+
+        gct = averages.get("ground_contact_ms")
+        if gct is not None:
+            if gct > 260:
+                insights.append(
+                    f"Ground contact time is high at {gct} ms — indicates heavy "
+                    "footstrike or overstriding. Focus on landing under your hips."
+                )
+            elif gct < 200:
+                insights.append(f"Ground contact time is excellent at {gct} ms.")
+
+        vo = averages.get("vertical_osc_cm")
+        if vo is not None:
+            if vo > 10:
+                insights.append(
+                    f"Vertical oscillation is high at {vo} cm — you may be "
+                    "bouncing more than needed. Aim for forward propulsion."
+                )
+            elif vo < 6:
+                insights.append(f"Vertical oscillation is excellent at {vo} cm.")
+
+        vr = averages.get("vertical_ratio_pct")
+        if vr is not None:
+            if vr > 10:
+                insights.append(
+                    f"Vertical ratio is high at {vr}% — "
+                    "energy is being spent going up rather than forward."
+                )
+            elif vr < 6:
+                insights.append(f"Vertical ratio is excellent at {vr}%.")
+
+        # Trend-based insights
+        for metric, label in [
+            ("cadence", "Cadence"),
+            ("ground_contact_ms", "Ground contact time"),
+            ("vertical_osc_cm", "Vertical oscillation"),
+            ("vertical_ratio_pct", "Vertical ratio"),
+        ]:
+            t = trends.get(metric, {})
+            if t.get("direction") == "improving":
+                insights.append(f"{label} is trending in the right direction.")
+            elif t.get("direction") == "declining":
+                insights.append(
+                    f"{label} has been trending in the wrong direction recently — "
+                    "worth monitoring."
+                )
+
+        if not insights:
+            insights.append("Running form looks consistent — no major issues detected.")
+
+        return {
+            "per_activity": per_activity,
+            "averages": averages,
+            "trends": trends,
+            "ratings": ratings,
+            "insights": insights,
+        }
+
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+@mcp.tool()
 def get_wellness_history(
     start_date: str,
     end_date: str,
