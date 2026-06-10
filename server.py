@@ -1062,7 +1062,7 @@ def plan_interval_session(
         return {"error": "Provide either total_minutes or reps."}
 
     interval_block_s = reps * (work_s + rest_s) - rest_s  # last rep has no trailing rest
-    total_s = wu_s + interval_block_s + rest_s + cd_s
+    total_s = wu_s + interval_block_s + cd_s
     total_min = round(total_s / 60, 1)
 
     # Distance estimates
