@@ -2271,6 +2271,188 @@ def taper_plan(
     return result
 
 
+@mcp.tool()
+def return_from_break() -> dict:
+    """Detect a running inactivity gap and generate a conservative ramp-back plan.
+
+    Queries the local activity cache to find the most recent run and computes
+    how many days have elapsed since it. If fewer than 7 days have passed,
+    returns an "active" status. Otherwise generates a week-by-week return plan
+    scaled to the break length.
+
+    Break length → plan:
+    - 1-2 weeks off: 2-week ramp, start at 60% of pre-break volume, +20%/week
+    - 2-4 weeks off: 3-week ramp, start at 50%, +20%/week
+    - 4-8 weeks off: 4-week ramp, start at 40%, +15%/week
+    - 8+ weeks off: 5-week ramp, start at 30%, +15%/week (includes clearance note)
+
+    Pre-break volume is the average weekly km over the 4 weeks immediately
+    before the break.
+
+    Each week in the return plan includes:
+    - target_km: total weekly volume target
+    - max_single_run_km: longest single run allowed (40% of weekly)
+    - session_count: recommended number of sessions (3-4)
+    - notes: coaching notes including quality-session restrictions
+
+    Returns:
+    - status: 'active' | 'break_detected'
+    - break_days: days since last run
+    - pre_break_weekly_km: estimated pre-break weekly volume
+    - return_weeks: list of week plans
+    - first_quality_session_week: earliest week number where quality is allowed
+    """
+    import sqlite3 as _sqlite3
+    from datetime import date as _date, datetime as _datetime
+
+    try:
+        from garmin_sync import DB_PATH as _DB_PATH
+        with _sqlite3.connect(_DB_PATH) as conn:
+            # Most recent run
+            row = conn.execute(
+                """
+                SELECT start_date_local, distance_m
+                FROM activities
+                WHERE sport_type = 'Run' AND distance_m IS NOT NULL
+                ORDER BY start_date_local DESC
+                LIMIT 1
+                """
+            ).fetchone()
+
+            if not row:
+                return {
+                    "status": "no_data",
+                    "message": "No runs found in the local cache. Run sync_activities() first.",
+                }
+
+            last_run_date_str = row[0][:10]
+            last_run_date = _date.fromisoformat(last_run_date_str)
+            today = _date.today()
+            break_days = (today - last_run_date).days
+
+            if break_days < 7:
+                return {
+                    "status": "active",
+                    "message": f"No significant break detected. Last run was {break_days} day(s) ago on {last_run_date_str}.",
+                    "break_days": break_days,
+                    "last_run_date": last_run_date_str,
+                }
+
+            # Pre-break volume: 4 weeks before the last run
+            pre_break_end = last_run_date_str
+            from datetime import timedelta as _td
+            pre_break_start = (last_run_date - _td(weeks=4)).isoformat()
+
+            weekly_rows = conn.execute(
+                """
+                SELECT
+                    strftime('%Y-%W', start_date_local) AS iso_week,
+                    SUM(distance_m) / 1000.0 AS weekly_km
+                FROM activities
+                WHERE sport_type = 'Run'
+                    AND distance_m IS NOT NULL
+                    AND date(start_date_local) BETWEEN ? AND ?
+                GROUP BY iso_week
+                ORDER BY iso_week
+                """,
+                (pre_break_start, pre_break_end),
+            ).fetchall()
+
+        if weekly_rows:
+            total_km = sum(r[1] for r in weekly_rows)
+            pre_break_weekly_km = round(total_km / len(weekly_rows), 1)
+        else:
+            # Fallback: use the last known run and estimate 20 km/week
+            pre_break_weekly_km = 20.0
+
+        # Determine plan parameters based on break length
+        break_weeks = break_days / 7
+        if break_weeks < 2:
+            plan_weeks = 2
+            start_pct = 0.60
+            step_pct = 0.20
+            medical_note = None
+        elif break_weeks < 4:
+            plan_weeks = 3
+            start_pct = 0.50
+            step_pct = 0.20
+            medical_note = None
+        elif break_weeks < 8:
+            plan_weeks = 4
+            start_pct = 0.40
+            step_pct = 0.15
+            medical_note = None
+        else:
+            plan_weeks = 5
+            start_pct = 0.30
+            step_pct = 0.15
+            medical_note = "Consider medical clearance before resuming training after an 8+ week break."
+
+        # Build the weekly return plan
+        return_weeks = []
+        for week_num in range(1, plan_weeks + 1):
+            pct = start_pct + step_pct * (week_num - 1)
+            target_km = round(pre_break_weekly_km * pct, 1)
+            max_single_km = round(target_km * 0.40, 1)
+
+            # Session count: 3 in week 1, 4 from week 2 onward
+            session_count = 3 if week_num == 1 else 4
+
+            # Quality session policy
+            if week_num == 1:
+                notes = (
+                    "Easy running only — no quality sessions. "
+                    "All runs at conversational/Z1-Z2 effort. "
+                    "Stop if any pain or unusual fatigue."
+                )
+            elif week_num == 2:
+                notes = (
+                    "Continue building aerobic base. "
+                    "Optional: one gentle fartlek with 4-6 short pickups (30s each) "
+                    "only if week 1 felt effortless."
+                )
+            else:
+                notes = (
+                    f"Week {week_num}: quality sessions allowed. "
+                    "Introduce one sub-threshold session (e.g. 3×8 min at sub-threshold pace). "
+                    "Keep remaining sessions easy."
+                )
+
+            week_entry: dict = {
+                "week": week_num,
+                "target_km": target_km,
+                "volume_pct_of_prebreak": round(pct * 100),
+                "max_single_run_km": max_single_km,
+                "session_count": session_count,
+                "notes": notes,
+            }
+            if medical_note and week_num == 1:
+                week_entry["medical_note"] = medical_note
+            return_weeks.append(week_entry)
+
+        result: dict = {
+            "status": "break_detected",
+            "break_days": break_days,
+            "last_run_date": last_run_date_str,
+            "pre_break_weekly_km": pre_break_weekly_km,
+            "return_weeks": return_weeks,
+            "first_quality_session_week": 3,
+            "plan_note": (
+                f"{break_days}-day break ({break_days // 7} week(s)). "
+                f"Pre-break base: {pre_break_weekly_km} km/week. "
+                f"{plan_weeks}-week return ramp starting at "
+                f"{round(start_pct * 100)}% of base volume."
+            ),
+        }
+        if medical_note:
+            result["medical_note"] = medical_note
+
+        return result
+
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
 # ─── Background startup sync ───────────────────────────────────────────
 def _startup_sync():
     try:
