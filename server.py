@@ -1272,7 +1272,12 @@ def delete_workout_template(workout_id: int) -> str:
 
 # ─── Activity sync + weekly summary (reads local cache) ────────────────
 @mcp.tool()
-def sync_activities(force_full: bool = False, weeks_back: Optional[int] = None) -> dict:
+def sync_activities(
+    force_full: bool = False,
+    weeks_back: Optional[int] = None,
+    backfill_links: bool = False,
+    backfill_max: int = 100,
+) -> dict:
     """Pull new activities + HR streams + laps from Garmin into the local cache.
 
     Runs incrementally since the last sync. An incremental sync runs
@@ -1294,11 +1299,27 @@ def sync_activities(force_full: bool = False, weeks_back: Optional[int] = None) 
             agent needs year-long trajectory data (`weekly_summary` will
             return `gap_warning=True` when the requested range is older
             than what's cached).
+        backfill_links: If True, also fetch workout-linkage detail
+            (associated_workout_id, planned_type, RPE/feel/compliance,
+            training_effect_label) for cached activities synced before
+            those fields existed. One extra API call per activity —
+            new activities get this automatically; this is only for
+            history.
+        backfill_max: Max activities to backfill per call (default 100).
+            `remaining_without_detail` in the response tells you whether
+            another round is needed.
 
     Returns dict with new_activities count, streams_fetched count,
-    laps_fetched count, last_sync timestamp, and any per-activity errors.
+    laps_fetched count, details_fetched count, last_sync timestamp, and
+    any per-activity errors. With backfill_links also details_fetched /
+    relinked / remaining_without_detail for the backfill pass.
     """
-    return garmin_sync.run_sync(_client(), force_full=force_full, weeks_back=weeks_back)
+    result = garmin_sync.run_sync(_client(), force_full=force_full, weeks_back=weeks_back)
+    if backfill_links and "error" not in result:
+        result["backfill"] = garmin_sync.backfill_workout_links(
+            _client(), max_activities=backfill_max
+        )
+    return result
 
 
 @mcp.tool()
@@ -1362,11 +1383,24 @@ def list_activities(
 
     Each activity row: id, date, start_time ('HH:MM'), name, sport_type,
     distance_km, moving_time_s, avg_hr, max_hr, elevation_gain_m,
-    pace_per_km ('M:SS'), classification_hint. The response also carries
-    the same `coverage` / `gap_warning` metadata as weekly_summary — check
-    it to distinguish "no matches" from "cache doesn't go back that far"
-    (default cache depth is 12 weeks; extend with
-    sync_activities(weeks_back=N)).
+    pace_per_km ('M:SS'), classification_hint, classification_source,
+    training_effect_label, workout_rpe, workout_feel, workout_compliance.
+
+    classification_hint is the planned type from the training plan when
+    the activity was run from a materialized workout
+    (classification_source='plan' — ground truth), falling back to
+    name-pattern matching (classification_source='name'). RPE/feel are
+    the watch's post-workout self-evaluation (0-100), compliance is
+    Garmin's execution score, and training_effect_label is Garmin's
+    physiological auto-label (TEMPO/AEROBIC_BASE/...) — a response
+    signal, NOT session intent. These are null for activities synced
+    before linkage existed; run sync_activities(backfill_links=True) to
+    populate history.
+
+    The response also carries the same `coverage` / `gap_warning`
+    metadata as weekly_summary — check it to distinguish "no matches"
+    from "cache doesn't go back that far" (default cache depth is 12
+    weeks; extend with sync_activities(weeks_back=N)).
     """
     return garmin_sync.list_activities(
         start_date=start_date, end_date=end_date, sport_type=sport_type,
@@ -1395,7 +1429,21 @@ def query_activity_cache(
     Schema (all timestamps are local time, ISO 'YYYY-MM-DDTHH:MM:SS'):
       activities(id, start_date_local, name, description, type,
                  sport_type, distance_m, moving_time_s, elapsed_time_s,
-                 avg_hr, max_hr, total_elevation_gain, synced_at)
+                 avg_hr, max_hr, total_elevation_gain, synced_at,
+                 associated_workout_id, planned_type,
+                 training_effect_label, workout_rpe, workout_feel,
+                 workout_compliance, detail_fetched_at)
+          associated_workout_id: Garmin workout template the activity
+          executed (null for free runs). planned_type: the plan's label
+          for that workout (threshold/easy/long/...) — ground truth for
+          classification when present. workout_rpe/workout_feel: watch
+          post-workout self-evaluation (0-100). workout_compliance:
+          Garmin execution score. training_effect_label: Garmin's
+          physiological auto-label — response signal, not intent.
+      workout_type_map(garmin_workout_id, planned_type, workout_name,
+                 plan_name, planned_date, updated_at)
+          Durable workout_id → planned type mapping, written at
+          materialize time; survives plan.json being replaced.
       laps(activity_id, laps_json, fetched_at)
           laps_json: JSON array of laps, each with lap_index, lap_type
           ('wu'/'drag'/'pause'/'cd'/'lap'), distance_m, moving_time_s,
@@ -1619,6 +1667,8 @@ def materialize_plan(from_date: Optional[str] = None) -> dict:
             created += 1
             # Persist immediately so an exception below doesn't lose the workout_id
             plan_mod.save_plan(p)
+            # Durable workout_id → type mapping; survives plan.json turnover
+            garmin_sync.record_workout_types([w], p.get("block_name"))
 
             sched = schedule_workout(wid, w["date"])
             sid = sched.get("schedule_id") if isinstance(sched, dict) else None
