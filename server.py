@@ -1214,9 +1214,11 @@ def elevation_impact(
     distance_km: Optional[float] = None,
     activity_id: Optional[int] = None,
 ) -> dict:
-    """Estimate how elevation gain affects running effort using grade-adjusted pace (GAP).
+    """Estimate how elevation gain affects running effort (grade-adjusted pace).
 
-    Uses a simplified Strava-style GAP model:
+    Uses a simple linear heuristic (NOT Strava's nonlinear GAP model —
+    treat the output as a rough estimate; it ignores the descent rebate,
+    so rolling/out-and-back routes are overestimated):
       GAP_factor = 1 + (avg_grade_pct * 0.033)
       flat_equivalent_pace = actual_pace / GAP_factor
 
@@ -1247,6 +1249,8 @@ def elevation_impact(
             """Return pace in seconds/km from 'M:SS' or 'M:SS/km'."""
             s = s.replace("/km", "").strip()
             parts = s.split(":")
+            if len(parts) != 2:
+                raise ValueError(f"expected M:SS, got {s!r}")
             return int(parts[0]) * 60 + int(parts[1])
 
         def _fmt_pace(s_per_km: float) -> str:
@@ -1278,7 +1282,15 @@ def elevation_impact(
                     }
                 if distance_km is None and _row[0] is not None:
                     distance_km = _row[0] / 1000.0
-                if elevation_gain_m is None and _row[1] is not None:
+                if elevation_gain_m is None:
+                    if _row[1] is None:
+                        return {
+                            "error": (
+                                f"Activity {activity_id} has no elevation data in the "
+                                "cache (likely a treadmill/indoor run) — elevation "
+                                "analysis is not applicable."
+                            )
+                        }
                     elevation_gain_m = float(_row[1])
             except Exception as e:
                 return {"error": f"Cache lookup failed: {type(e).__name__}: {e}"}
@@ -1288,6 +1300,8 @@ def elevation_impact(
             return {"error": "actual_pace_min_per_km is required."}
         if elevation_gain_m is None:
             return {"error": "elevation_gain_m is required (or pass activity_id to read from cache)."}
+        if elevation_gain_m < 0:
+            return {"error": "elevation_gain_m must be >= 0 (total ascent, not net elevation change)."}
         if distance_km is None:
             return {"error": "distance_km is required (or pass activity_id to read from cache)."}
         if distance_km <= 0:
