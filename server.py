@@ -1326,6 +1326,117 @@ def weekly_summary(start_date: str, end_date: str) -> dict:
     return garmin_sync.weekly_summary(start_date, end_date)
 
 
+@mcp.tool()
+def list_activities(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    sport_type: Optional[str] = None,
+    started_before: Optional[str] = None,
+    started_after: Optional[str] = None,
+    name_contains: Optional[str] = None,
+    classification: Optional[str] = None,
+    limit: int = 200,
+) -> dict:
+    """Flat, filterable list of cached activities — one lightweight row each.
+
+    Use this for cross-activity analysis over many sessions (e.g. "all runs
+    before 09:00", "every threshold session this year", "easy runs over
+    10 km"). Unlike `weekly_summary` it returns per-activity metadata
+    including the local start TIME, and scales to the full cache in one
+    call. For per-lap detail on a single session use `activity_breakdown`;
+    for arbitrary aggregations use `query_activity_cache`.
+
+    All filters are optional and combine with AND:
+        start_date / end_date: 'YYYY-MM-DD' (inclusive) activity date range.
+        sport_type: exact match, e.g. 'Run', 'Rowing', 'NordicSki',
+            'WeightTraining', 'Ride'.
+        started_before / started_after: 'HH:MM' local start-of-day time —
+            e.g. started_before='09:00' for morning sessions,
+            started_after='16:00' for evening sessions.
+        name_contains: case-insensitive substring match on activity name.
+        classification: filter on classification_hint — one of easy/
+            threshold/tempo/intervals/long/prog-long/race/strength/hike/
+            ride/unknown.
+        limit: max rows returned (default 200, cap 1000). `matched_count`
+            in the response tells you if more matched than were returned.
+
+    Each activity row: id, date, start_time ('HH:MM'), name, sport_type,
+    distance_km, moving_time_s, avg_hr, max_hr, elevation_gain_m,
+    pace_per_km ('M:SS'), classification_hint. The response also carries
+    the same `coverage` / `gap_warning` metadata as weekly_summary — check
+    it to distinguish "no matches" from "cache doesn't go back that far"
+    (default cache depth is 12 weeks; extend with
+    sync_activities(weeks_back=N)).
+    """
+    return garmin_sync.list_activities(
+        start_date=start_date, end_date=end_date, sport_type=sport_type,
+        started_before=started_before, started_after=started_after,
+        name_contains=name_contains, classification=classification,
+        limit=limit,
+    )
+
+
+@mcp.tool()
+def query_activity_cache(
+    sql: str,
+    params: Optional[list] = None,
+    limit: int = 200,
+    max_cell_chars: int = 500,
+) -> dict:
+    """Run a read-only SQL SELECT against the local activity cache.
+
+    Escape hatch for analyses the dedicated tools don't cover: arbitrary
+    grouping, joins, time-of-day buckets, HR distributions, trends. The
+    connection is opened read-only at the SQLite level — only a single
+    SELECT (or WITH ... SELECT) statement is accepted. Prefer
+    `list_activities` / `weekly_summary` / `get_wellness_history` when
+    they fit; reach for SQL when they don't.
+
+    Schema (all timestamps are local time, ISO 'YYYY-MM-DDTHH:MM:SS'):
+      activities(id, start_date_local, name, description, type,
+                 sport_type, distance_m, moving_time_s, elapsed_time_s,
+                 avg_hr, max_hr, total_elevation_gain, synced_at)
+      laps(activity_id, laps_json, fetched_at)
+          laps_json: JSON array of laps, each with lap_index, lap_type
+          ('wu'/'drag'/'pause'/'cd'/'lap'), distance_m, moving_time_s,
+          avg_hr, max_hr, avg_speed_m_s.
+      streams(activity_id, time_json, hr_json)
+          Parallel JSON arrays of elapsed seconds and HR samples. These
+          are LARGE (thousands of points) — never SELECT them raw; use
+          json_each() to aggregate in SQL, e.g.:
+          SELECT avg(value) FROM streams, json_each(hr_json)
+          WHERE activity_id = 123.
+      wellness_daily(date, resting_hr, hrv_overnight_avg, hrv_weekly_avg,
+                 hrv_status, hrv_baseline_low, hrv_baseline_upper,
+                 sleep_seconds, sleep_score, sleep_deep_s, sleep_rem_s,
+                 sleep_light_s, sleep_awake_s, avg_stress,
+                 body_battery_high, body_battery_low,
+                 body_battery_at_wake, respiration_avg, spo2_avg,
+                 recovery_time_hours, synced_at)
+      sync_state(key, value)
+
+    Useful idioms: substr(start_date_local, 12, 5) gives 'HH:MM' start
+    time; date(start_date_local) gives the date; SQLite JSON1 functions
+    (json_each, json_extract, json_array_length) are available for the
+    laps/streams JSON columns.
+
+    Args:
+        sql: a single SELECT or WITH ... SELECT statement. Use ? placeholders
+            with `params` for values.
+        params: positional parameters for ? placeholders.
+        limit: max rows returned (default 200, cap 1000); `truncated_rows`
+            is True when the query matched more.
+        max_cell_chars: long text cells are cut at this length (default 500)
+            and marked — raise it deliberately if you truly need a big blob.
+
+    Returns {columns, rows, row_count, truncated_rows, truncated_cells}
+    or {error} on invalid/non-SELECT SQL.
+    """
+    return garmin_sync.query_cache(
+        sql, params=params, limit=limit, max_cell_chars=max_cell_chars
+    )
+
+
 # ─── Training plan: load, save, materialize, compare ──────────────────
 @mcp.tool()
 def get_plan() -> dict:

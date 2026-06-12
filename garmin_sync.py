@@ -428,11 +428,14 @@ _NAME_PATTERNS = [
     ("threshold", re.compile(
         r"terskel|subterskel|threshold|sub.?threshold|tempo.?run", re.I)),
     ("tempo", re.compile(
-        r"^tempo", re.I)),
+        r"\btempo\b", re.I)),
     ("intervals", re.compile(
         r"intervall|interval|pyramide|pyramid|vo2|speed.?work|track", re.I)),
     ("race", re.compile(
         r"stafett|etappe|race|parkrun|\bfun run\b|\b5k\b|\b10k\b|\bhalf marathon\b|\bmarathon\b", re.I)),
+    # Keep last so the more specific patterns above win (e.g. "Long easy").
+    ("easy", re.compile(
+        r"easy run|rolig tur|recovery run", re.I)),
 ]
 _DEFAULT_RUN_NAMES = re.compile(
     r"^(morning|afternoon|evening|lunch|easy|recovery|slow|base|aerobic|zone ?2)\s*(run|jog|løp)?$",
@@ -583,6 +586,165 @@ def weekly_summary(start_date: str, end_date: str) -> dict:
                 f"{oldest}. Call sync_activities(weeks_back=N) for deeper history."
             ) if gap_warning else None,
         },
+    }
+
+
+# ─── Flat activity list with filters ──────────────────────────────────
+def list_activities(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    sport_type: Optional[str] = None,
+    started_before: Optional[str] = None,
+    started_after: Optional[str] = None,
+    name_contains: Optional[str] = None,
+    classification: Optional[str] = None,
+    limit: int = 200,
+) -> dict:
+    """Flat list of cached activities with per-activity metadata.
+
+    Unlike weekly_summary this returns one lightweight row per activity
+    (no streams, no zone computation) so it scales to the whole cache.
+    """
+    _init_db()
+    limit = max(1, min(limit, 1000))
+
+    where = ["1=1"]
+    params: list[Any] = []
+    if start_date:
+        where.append("date(start_date_local) >= ?")
+        params.append(start_date)
+    if end_date:
+        where.append("date(start_date_local) <= ?")
+        params.append(end_date)
+    if sport_type:
+        where.append("sport_type = ?")
+        params.append(sport_type)
+    if started_before:
+        where.append("substr(start_date_local, 12, 5) < ?")
+        params.append(started_before)
+    if started_after:
+        where.append("substr(start_date_local, 12, 5) >= ?")
+        params.append(started_after)
+    if name_contains:
+        where.append("name LIKE ?")
+        params.append(f"%{name_contains}%")
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            f"""
+            SELECT id, start_date_local, name, type, sport_type, distance_m,
+                   moving_time_s, avg_hr, max_hr, total_elevation_gain
+            FROM activities
+            WHERE {' AND '.join(where)}
+            ORDER BY start_date_local
+            """,
+            params,
+        ).fetchall()
+        extent = conn.execute(
+            "SELECT MIN(date(start_date_local)) AS oldest, "
+            "MAX(date(start_date_local)) AS newest FROM activities"
+        ).fetchone()
+
+    activities = []
+    for r in rows:
+        hint = name_hint(r["name"], r["sport_type"])
+        if classification and hint != classification:
+            continue
+        pace = None
+        if r["distance_m"] and r["moving_time_s"]:
+            sec_per_km = r["moving_time_s"] / (r["distance_m"] / 1000)
+            pace = f"{int(sec_per_km // 60)}:{int(sec_per_km % 60):02d}"
+        activities.append({
+            "id": r["id"],
+            "date": r["start_date_local"][:10],
+            "start_time": r["start_date_local"][11:16],
+            "name": r["name"],
+            "sport_type": r["sport_type"],
+            "distance_km": round((r["distance_m"] or 0) / 1000, 2),
+            "moving_time_s": r["moving_time_s"],
+            "avg_hr": r["avg_hr"],
+            "max_hr": r["max_hr"],
+            "elevation_gain_m": r["total_elevation_gain"],
+            "pace_per_km": pace,
+            "classification_hint": hint,
+        })
+
+    matched = len(activities)
+    oldest = extent["oldest"] if extent else None
+    gap_warning = bool(oldest and start_date and start_date < oldest)
+    return {
+        "activities": activities[:limit],
+        "matched_count": matched,
+        "returned_count": min(matched, limit),
+        "coverage": {
+            "cache_oldest_activity": oldest,
+            "cache_newest_activity": extent["newest"] if extent else None,
+            "gap_warning": gap_warning,
+            "gap_hint": (
+                f"Requested range starts {start_date} but cache only goes back "
+                f"to {oldest}. Call sync_activities(weeks_back=N) for deeper "
+                f"history."
+            ) if gap_warning else None,
+        },
+    }
+
+
+# ─── Read-only SQL access to the cache ────────────────────────────────
+_WRITE_SQL = re.compile(
+    r"\b(insert|update|delete|drop|alter|create|replace|pragma|attach"
+    r"|detach|vacuum|reindex)\b",
+    re.IGNORECASE,
+)
+
+
+def query_cache(
+    sql: str,
+    params: Optional[list] = None,
+    limit: int = 200,
+    max_cell_chars: int = 500,
+) -> dict:
+    """Run a read-only SELECT against cache.db.
+
+    The connection is opened with mode=ro (writes fail at the SQLite
+    level); the keyword check just gives a clearer error message.
+    """
+    _init_db()
+    stripped = sql.strip().rstrip(";")
+    if not re.match(r"^(select|with)\b", stripped, re.IGNORECASE):
+        return {"error": "Only SELECT (or WITH ... SELECT) statements are allowed."}
+    if _WRITE_SQL.search(stripped):
+        return {"error": "Statement contains a write/DDL keyword; the cache is read-only."}
+    limit = max(1, min(limit, 1000))
+
+    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    try:
+        cur = conn.execute(stripped, params or [])
+        columns = [d[0] for d in cur.description] if cur.description else []
+        raw = cur.fetchmany(limit + 1)
+    except sqlite3.Error as e:
+        return {"error": f"SQLite error: {e}"}
+    finally:
+        conn.close()
+
+    truncated_rows = len(raw) > limit
+    truncated_cells = 0
+    rows = []
+    for r in raw[:limit]:
+        out = []
+        for cell in r:
+            if isinstance(cell, str) and len(cell) > max_cell_chars:
+                cell = cell[:max_cell_chars] + f"… [truncated, {len(cell)} chars total]"
+                truncated_cells += 1
+            out.append(cell)
+        rows.append(out)
+
+    return {
+        "columns": columns,
+        "rows": rows,
+        "row_count": len(rows),
+        "truncated_rows": truncated_rows,
+        "truncated_cells": truncated_cells,
     }
 
 
